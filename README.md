@@ -1,6 +1,6 @@
 # QuestRoomScan
 
-Real-time 3D room reconstruction on Meta Quest 3. Produces a textured mesh from depth + RGB camera data using GPU TSDF volume integration and Surface Nets mesh extraction, with server-based Gaussian Splat training and on-device rendering via [Unity Gaussian Splatting](https://github.com/arghyasur1991/UnityGaussianSplatting).
+Real-time 3D room reconstruction on Meta Quest 3. Produces a textured mesh from depth + RGB camera data using GPU TSDF volume integration and Surface Nets mesh extraction, with server-based Gaussian Splat training and on-device rendering via [Unity Gaussian Splatting](https://github.com/genesisinteractive/UnityGaussianSplatting).
 
 | Scanning (Triplanar) | Vertex Colors |
 |:---:|:---:|
@@ -92,7 +92,7 @@ This is the case the package was built for. Quest's built-in room mesh gives you
 | `com.unity.burst` | 1.8+ | Required by Collections/Mathematics |
 | `com.unity.collections` | 2.4+ | NativeArray for plane detection |
 | `com.unity.mathematics` | 1.3+ | Math types used throughout |
-| `org.nesnausk.gaussian-splatting` | [fork](https://github.com/arghyasur1991/UnityGaussianSplatting) | **Optional** — Gaussian splat rendering with runtime PLY loading |
+| `org.nesnausk.gaussian-splatting` | [fork](https://github.com/genesisinteractive/UnityGaussianSplatting) | **Optional** — Gaussian splat rendering with runtime PLY loading |
 | `com.unity.ai.inference` | 2.x+ | **Optional** — AI object detection (YOLO via Sentis). Assembly `Genesis.RoomScan.AIDetection` auto-activates when present |
 
 Additional project-level dependencies (not in `package.json` — installed via Meta's SDK or XR plugin management):
@@ -113,12 +113,12 @@ Add to your project's `Packages/manifest.json`, pinned to a release tag:
 ```json
 {
   "dependencies": {
-    "com.genesis.roomscan": "https://github.com/arghyasur1991/QuestRoomScan.git#v1.3.0"
+    "com.genesis.roomscan": "https://github.com/genesisinteractive/QuestRoomScan.git#v1.3.1"
   }
 }
 ```
 
-Drop the `#v1.3.0` suffix to track `main`. Releases and their notes are in
+Drop the `#v1.3.1` suffix to track `main`. Releases and their notes are in
 [`CHANGELOG.md`](CHANGELOG.md); `main` only moves by squash-merged release PR.
 
 For Gaussian Splat support, also add the optional dependency:
@@ -126,8 +126,8 @@ For Gaussian Splat support, also add the optional dependency:
 ```json
 {
   "dependencies": {
-    "com.genesis.roomscan": "https://github.com/arghyasur1991/QuestRoomScan.git",
-    "org.nesnausk.gaussian-splatting": "https://github.com/arghyasur1991/UnityGaussianSplatting.git?path=package#main"
+    "com.genesis.roomscan": "https://github.com/genesisinteractive/QuestRoomScan.git",
+    "org.nesnausk.gaussian-splatting": "https://github.com/genesisinteractive/UnityGaussianSplatting.git?path=package#main"
   }
 }
 ```
@@ -137,7 +137,7 @@ For AI object detection (YOLO), add the Sentis inference package:
 ```json
 {
   "dependencies": {
-    "com.genesis.roomscan": "https://github.com/arghyasur1991/QuestRoomScan.git",
+    "com.genesis.roomscan": "https://github.com/genesisinteractive/QuestRoomScan.git",
     "com.unity.ai.inference": "2.3.0"
   }
 }
@@ -208,7 +208,7 @@ This lets you selectively protect good surfaces while continuing to refine other
 Once the room is well-scanned:
 
 1. Open the debug menu (left thumbstick click)
-2. Verify the **Server URL** points to your PC running [RoomScan-GaussianSplatServer](https://github.com/arghyasur1991/RoomScan-GaussianSplatServer). If you used the setup wizard and your PC is on the same LAN, the IP is auto-detected and should already be correct. For a cloud/remote server, edit the URL in the debug menu or set it in the Inspector before building.
+2. Verify the **Server URL** points to your PC running [RoomScan-GaussianSplatServer](https://github.com/genesisinteractive/RoomScan-GaussianSplatServer). If you used the setup wizard and your PC is on the same LAN, the IP is auto-detected and should already be correct. For a cloud/remote server, edit the URL in the debug menu or set it in the Inspector before building.
 3. Press **Start GS Training** — this triggers the full pipeline automatically:
    - Exports the current mesh as a point cloud (`points3d.ply`)
    - ZIPs all keyframes, poses, and point cloud from the active package
@@ -333,7 +333,7 @@ QuestRoomScan captures keyframes and a dense point cloud during scanning, upload
 - **KeyframeCollector**: Motion-gated JPEG frames + camera poses saved directly into the active scan package (`keyframes/images/*.jpg`, `keyframes/frames.jsonl`). Captures are triggered by camera movement — you get more keyframes by looking at the room from different angles.
 - **PointCloudExporter**: GPU mesh vertices exported as binary PLY (`points3d.ply`) via `AsyncGPUReadback`. Exported on demand — automatically before GS training upload, or manually via the debug menu's Tools view.
 
-### Server Training (via [RoomScan-GaussianSplatServer](https://github.com/arghyasur1991/RoomScan-GaussianSplatServer))
+### Server Training (via [RoomScan-GaussianSplatServer](https://github.com/genesisinteractive/RoomScan-GaussianSplatServer))
 
 The companion PC server handles the full training pipeline:
 
@@ -354,7 +354,7 @@ When you press **Start GS Training** in the debug menu, the following happens au
 
 ### On-Device Rendering (UGS)
 
-Trained splats are rendered using a [fork of Unity Gaussian Splatting](https://github.com/arghyasur1991/UnityGaussianSplatting) with runtime PLY loading and Quest 3 optimizations:
+Trained splats are rendered using a [fork of Unity Gaussian Splatting](https://github.com/genesisinteractive/UnityGaussianSplatting) with runtime PLY loading and Quest 3 optimizations:
 
 - **`GaussianSplatPlyLoader`**: Parses binary PLY → converts to UGS internal format → creates GPU buffers directly (no Editor asset pipeline needed)
 - **Coordinate conversion**: COLMAP (right-handed Y-down) → Unity (left-handed Y-up)

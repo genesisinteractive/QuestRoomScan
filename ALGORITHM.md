@@ -876,7 +876,7 @@ Each upload creates a timestamped directory. A `current_run` symlink points to t
 
 ### 14.4 On-Device Rendering (UGS)
 
-Trained PLY is rendered using a [fork of Unity Gaussian Splatting](https://github.com/arghyasur1991/UnityGaussianSplatting) with runtime loading support.
+Trained PLY is rendered using a [fork of Unity Gaussian Splatting](https://github.com/genesisinteractive/UnityGaussianSplatting) with runtime loading support.
 
 #### Runtime PLY Loading (`GaussianSplatPlyLoader`)
 Parses binary little-endian PLY and converts to UGS internal format (VeryHigh / Float32):

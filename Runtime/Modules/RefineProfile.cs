@@ -91,7 +91,11 @@ namespace Genesis.RoomScan
             _frameSum += dt;
             if (dt > _frameMax) { _frameMax = dt; _worstFrameStage = _currentStage; }
             if (dt > FrameBudgetMs * 1.05f) _framesOverBudget++;
-            if (dt > HitchMs) _hitches++;
+            if (dt > HitchMs)
+            {
+                _hitches++;
+                Logger.Warning($"[TextureRefine][Hitch] {dt:F0}ms stage={_currentStage}");
+            }
         }
 
         public void Keyframe(double decodeWaitMs, double uploadMs, double refineMs, double issueMs,
