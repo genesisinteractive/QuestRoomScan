@@ -6,6 +6,24 @@ All notable changes to this package are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-09-19
+
+The package now lives at
+[genesisinteractive/QuestRoomScan](https://github.com/genesisinteractive/QuestRoomScan);
+the previous GitHub URL redirects. Profiled texture bakes log each
+compositor hitch as it happens.
+
+### Changed
+
+- Install and documentation URLs point at
+  `https://github.com/genesisinteractive/QuestRoomScan`. Pin
+  `#v1.3.1`.
+
+### Added
+
+- When `profileRefinement` is on, every compositor frame over 25 ms is
+  logged with the current pipeline stage, not only in the end summary.
+
 ## [1.3.0] - 2026-09-15
 
 Fixes a **texture-quality regression** from 1.0–1.1: close-up keyframes
