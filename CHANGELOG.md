@@ -6,6 +6,16 @@ All notable changes to this package are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.3.2] - 2026-10-05
+
+Requires **Unity 6.2**. Unity 6.0 installed the package and then failed
+to compile `VRDocumentRaycaster`, because `WorldDocumentRaycaster` does
+not exist before `6000.2`.
+
+### Changed
+
+- Minimum Unity version is `6000.2`. Pin `#v1.3.2`.
+
 ## [1.3.1] - 2026-09-19
 
 The package now lives at
