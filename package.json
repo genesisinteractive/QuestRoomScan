@@ -3,7 +3,7 @@
   "version": "1.3.1",
   "displayName": "Quest Room Scan",
   "description": "Real-time 3D room reconstruction on Meta Quest 3. GPU TSDF volume integration, GPU Surface Nets meshing, persistent texturing, and Gaussian Splat export.",
-  "unity": "6000.0",
+  "unity": "6000.2",
   "dependencies": {
     "com.unity.xr.arfoundation": "6.1.1",
     "com.unity.burst": "1.8.18",
