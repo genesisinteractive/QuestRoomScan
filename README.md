@@ -78,7 +78,7 @@ This is the case the package was built for. Quest's built-in room mesh gives you
 
 ## Requirements
 
-- **Unity 6** (6000.x)
+- **Unity 6.2** or newer (`6000.2+`). The VR debug menu uses world-space UI Toolkit input (`WorldDocumentRaycaster`), which is not in Unity 6.0 or 6.1.
 - **URP** (Universal Render Pipeline)
 - **Meta Quest 3** (depth sensor required)
 
