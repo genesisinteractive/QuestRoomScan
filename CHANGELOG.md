@@ -6,6 +6,15 @@ All notable changes to this package are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Keyframe manifest (`frames.jsonl`) numbers are written with the
+  invariant culture. On decimal-comma device locales every line was
+  invalid JSON, and the on-device refine read truncated poses
+  ([#32](https://github.com/genesisinteractive/QuestRoomScan/issues/32),
+  [#33](https://github.com/genesisinteractive/QuestRoomScan/pull/33),
+  thanks @diegoxfx).
+
 ## [1.3.2] - 2026-10-05
 
 Requires **Unity 6.2**. Unity 6.0 installed the package and then failed
