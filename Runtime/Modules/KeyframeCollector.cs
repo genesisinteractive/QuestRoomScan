@@ -359,26 +359,28 @@ namespace Genesis.RoomScan
                         File.WriteAllBytes(Path.Combine(_imagesDir, $"{id:D6}.jpg"), jpgBytes);
                     }
 
+                    // JSON numbers always use a decimal point, regardless of headset locale.
+                    var ci = System.Globalization.CultureInfo.InvariantCulture;
                     var sb = new StringBuilder(256);
                     sb.Append("{\"id\":").Append(id);
-                    sb.Append(",\"ts\":").Append(timestamp.ToString("F3"));
-                    sb.Append(",\"px\":").Append(pos.x.ToString("F6"));
-                    sb.Append(",\"py\":").Append(pos.y.ToString("F6"));
-                    sb.Append(",\"pz\":").Append(pos.z.ToString("F6"));
-                    sb.Append(",\"qx\":").Append(rot.x.ToString("F6"));
-                    sb.Append(",\"qy\":").Append(rot.y.ToString("F6"));
-                    sb.Append(",\"qz\":").Append(rot.z.ToString("F6"));
-                    sb.Append(",\"qw\":").Append(rot.w.ToString("F6"));
-                    sb.Append(",\"fx\":").Append(focalLen.x.ToString("F4"));
-                    sb.Append(",\"fy\":").Append(focalLen.y.ToString("F4"));
-                    sb.Append(",\"cx\":").Append(principalPt.x.ToString("F4"));
-                    sb.Append(",\"cy\":").Append(principalPt.y.ToString("F4"));
+                    sb.Append(",\"ts\":").Append(timestamp.ToString("F3", ci));
+                    sb.Append(",\"px\":").Append(pos.x.ToString("F6", ci));
+                    sb.Append(",\"py\":").Append(pos.y.ToString("F6", ci));
+                    sb.Append(",\"pz\":").Append(pos.z.ToString("F6", ci));
+                    sb.Append(",\"qx\":").Append(rot.x.ToString("F6", ci));
+                    sb.Append(",\"qy\":").Append(rot.y.ToString("F6", ci));
+                    sb.Append(",\"qz\":").Append(rot.z.ToString("F6", ci));
+                    sb.Append(",\"qw\":").Append(rot.w.ToString("F6", ci));
+                    sb.Append(",\"fx\":").Append(focalLen.x.ToString("F4", ci));
+                    sb.Append(",\"fy\":").Append(focalLen.y.ToString("F4", ci));
+                    sb.Append(",\"cx\":").Append(principalPt.x.ToString("F4", ci));
+                    sb.Append(",\"cy\":").Append(principalPt.y.ToString("F4", ci));
                     sb.Append(",\"sw\":").Append((int)sensorRes.x);
                     sb.Append(",\"sh\":").Append((int)sensorRes.y);
                     sb.Append(",\"w\":").Append((int)currentRes.x);
                     sb.Append(",\"h\":").Append((int)currentRes.y);
                     if (sceneZ > 0.05f)
-                        sb.Append(",\"z\":").Append(sceneZ.ToString("F3"));
+                        sb.Append(",\"z\":").Append(sceneZ.ToString("F3", ci));
                     // Hand / forearm capsules at capture: "x y z x y z r;..." (no
                     // commas — the manifest reader splits lines on them).
                     if (!string.IsNullOrEmpty(caps))
