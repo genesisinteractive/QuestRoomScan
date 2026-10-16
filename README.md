@@ -10,7 +10,7 @@ Real-time 3D room reconstruction on Meta Quest 3. Produces a textured mesh from 
 |:---:|:---:|
 | ![Refined](docs/refined3.gif) | ![Splat](docs/splat.gif) |
 
-**[Full demo video](https://www.youtube.com/watch?v=lEn3GkH7Yao)** — recorded before multi-view blending, GPU sharpening, and atlas enhancement were added; current output quality is noticeably better.
+**[Full demo video](https://www.youtube.com/watch?v=_bwo2xWx1fY)** — recorded before multi-view blending, GPU sharpening, and atlas enhancement were added; current output quality is noticeably better.
 
 **If you're integrating this package into a game or app**, start with [Installation](#installation), [Quick Start](#quick-start), and [Game Integration Guide](#game-integration-guide). For the full scan pipeline and debug tooling, see [Usage Flow](#usage-flow) and [VR Debug Menu](#vr-debug-menu).
 
