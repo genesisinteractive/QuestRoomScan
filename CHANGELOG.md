@@ -6,6 +6,30 @@ All notable changes to this package are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.3.3] - 2026-10-29
+
+Keyframe manifests now read correctly on decimal-comma device locales, so
+the on-device refine gets full camera poses there. The licence and the
+package author are now Genesis Interactive.
+
+### Changed
+
+- The copyright holder in `LICENSE.md` and the package author are now
+  Genesis Interactive.
+- README: a short summary and the project website
+  (https://genesisinteractive.in/questroomscan/) at the top, and a
+  "Using QuestRoomScan in your app" section on shipping the licence
+  text and crediting the project.
+
+### Fixed
+
+- Keyframe manifest (`frames.jsonl`) numbers are written with the
+  invariant culture. On decimal-comma device locales every line was
+  invalid JSON, and the on-device refine read truncated poses
+  ([#32](https://github.com/genesisinteractive/QuestRoomScan/issues/32),
+  [#33](https://github.com/genesisinteractive/QuestRoomScan/pull/33),
+  thanks @diegoxfx).
+
 ## [1.3.2] - 2026-10-05
 
 Requires **Unity 6.2**. Unity 6.0 installed the package and then failed
