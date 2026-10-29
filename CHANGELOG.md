@@ -6,6 +6,12 @@ All notable changes to this package are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.3.3] - 2026-10-29
+
+Keyframe manifests now read correctly on decimal-comma device locales, so
+the on-device refine gets full camera poses there. The licence and the
+package author are now Genesis Interactive.
+
 ### Changed
 
 - The copyright holder in `LICENSE.md` and the package author are now
