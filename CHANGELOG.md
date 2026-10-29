@@ -6,6 +6,15 @@ All notable changes to this package are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The copyright holder in `LICENSE.md` and the package author are now
+  Genesis Interactive.
+- README: a short summary and the project website
+  (https://genesisinteractive.in/questroomscan/) at the top, and a
+  "Using QuestRoomScan in your app" section on shipping the licence
+  text and crediting the project.
+
 ### Fixed
 
 - Keyframe manifest (`frames.jsonl`) numbers are written with the

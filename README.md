@@ -1,5 +1,7 @@
 # QuestRoomScan
 
+**Open source textured room scanner on Quest 3.** Look around your room and it becomes a textured 3D mesh in real time, on the headset; then sharpen the textures from the camera frames and train a Gaussian splat of the same room. Free under the MIT licence. Website: **[genesisinteractive.in/questroomscan](https://genesisinteractive.in/questroomscan/)**.
+
 Real-time 3D room reconstruction on Meta Quest 3. Produces a textured mesh from depth + RGB camera data using GPU TSDF volume integration and Surface Nets mesh extraction, with server-based Gaussian Splat training and on-device rendering via [Unity Gaussian Splatting](https://github.com/genesisinteractive/UnityGaussianSplatting).
 
 | Scanning (Triplanar) | Vertex Colors |
@@ -37,6 +39,7 @@ Real-time 3D room reconstruction on Meta Quest 3. Produces a textured mesh from 
 - [**Game Integration Guide**](#game-integration-guide)
   - [Placing Content So It Comes Back in the Right Spot](#placing-content-so-it-comes-back-in-the-right-spot)
 - [Credits & Prior Art](#credits--prior-art)
+- [Using QuestRoomScan in your app](#using-questroomscan-in-your-app)
 - [License](#license)
 
 ## Used In
@@ -809,6 +812,15 @@ QuestRoomScan builds on that foundation with significant extensions:
 | **VR UI** | — | World-space debug menu with controller ray interaction, live status, and training controls |
 | **Packaging** | Embedded in a game | Standalone Unity package with one-click editor setup wizard |
 
+## Using QuestRoomScan in your app
+
+You're welcome to, commercial apps included. Two things, please:
+
+1. **Ship the licence.** MIT asks that the copyright notice and licence text in [LICENSE.md](LICENSE.md) go with every copy, so put it in your app's licences / credits screen or a bundled file.
+2. **Credit the project.** "QuestRoomScan by Genesis Interactive", linking to https://github.com/genesisinteractive/QuestRoomScan, in your credits and store page.
+
+Shipped something with it? Open an issue and it goes on the [Used In](#used-in) list.
+
 ## License
 
-[MIT](LICENSE.md) — see [LICENSE.md](LICENSE.md) for full text and attribution.
+[MIT](LICENSE.md), © 2026 Genesis Interactive. See [LICENSE.md](LICENSE.md) for the full text.
