@@ -264,6 +264,32 @@ namespace Genesis.RoomScan
             => CopyWallFacesOfRoomContaining(Query.HeadsetWorldPosition(), dest, kind);
 
         /// <summary>
+        /// Scene API labels of the anchors in every loaded room that contains
+        /// <paramref name="worldPos"/> (the names of
+        /// <see cref="MRUKAnchor.SceneLabels"/>: <c>BED</c>, <c>TABLE</c>,
+        /// <c>COUCH</c>, <c>WALL_FACE</c>, …), each once. Overlapping captures
+        /// are unioned. Returns 0 in the editor and when the point is not
+        /// inside a captured room. Clears <paramref name="dest"/>.
+        /// </summary>
+        public int CopyLabelsOfRoomContaining(Vector3 worldPos, List<string> dest)
+        {
+            if (dest == null) return 0;
+            dest.Clear();
+            if (Application.isEditor) return 0;
+            EnsureMruk();
+            SubscribeToRoomEvents();
+            if (_mruk == null || _mruk.Rooms == null) return 0;
+            return Query.CopyLabelsAt(_mruk.Rooms, worldPos, dest);
+        }
+
+        /// <summary>
+        /// Scene API labels of every loaded room that contains the headset
+        /// (see <see cref="CopyLabelsOfRoomContaining"/>).
+        /// </summary>
+        public int CopyHeadsetRoomLabels(List<string> dest)
+            => CopyLabelsOfRoomContaining(Query.HeadsetWorldPosition(), dest);
+
+        /// <summary>
         /// True when <paramref name="worldPos"/> is inside the captured
         /// space with this Scene API room UUID (floor outline + outer
         /// walls). False when the UUID is empty or the room is not loaded.
@@ -779,6 +805,53 @@ namespace Genesis.RoomScan
                     AppendWallFaces(room, dst, kind);
                 }
                 return dst.Count;
+            }
+
+            /// <summary>
+            /// Names of the Scene API labels (<see cref="MRUKAnchor.SceneLabels"/>) carried by the anchors of every
+            /// room that contains <paramref name="worldPos"/>, each once. Clears <paramref name="dst"/>.
+            /// </summary>
+            internal static int CopyLabelsAt(IList<MRUKRoom> rooms, Vector3 worldPos, List<string> dst)
+            {
+                if (dst == null) return 0;
+                dst.Clear();
+                if (rooms == null) return 0;
+                for (int i = 0; i < rooms.Count; i++)
+                {
+                    var room = rooms[i];
+                    if (room == null || room.Anchors == null || !Contains(room, worldPos)) continue;
+                    for (int a = 0; a < room.Anchors.Count; a++)
+                    {
+                        var anchor = room.Anchors[a];
+                        if (anchor != null) AppendLabelNames(anchor.Label, dst);
+                    }
+                }
+                return dst.Count;
+            }
+
+            static readonly MRUKAnchor.SceneLabels[] SingleLabels = SingleLabelValues();
+
+            static MRUKAnchor.SceneLabels[] SingleLabelValues()
+            {
+                var all = (MRUKAnchor.SceneLabels[])Enum.GetValues(typeof(MRUKAnchor.SceneLabels));
+                var singles = new List<MRUKAnchor.SceneLabels>(all.Length);
+                foreach (var v in all)
+                {
+                    ulong bits = unchecked((uint)Convert.ToInt32(v)); // a flag at bit 31 is negative as an int
+                    if (bits != 0 && (bits & (bits - 1)) == 0) singles.Add(v);
+                }
+                return singles.ToArray();
+            }
+
+            static void AppendLabelNames(MRUKAnchor.SceneLabels labels, List<string> dst)
+            {
+                for (int i = 0; i < SingleLabels.Length; i++)
+                {
+                    var flag = SingleLabels[i];
+                    if ((labels & flag) == 0) continue;
+                    string name = flag.ToString();
+                    if (!dst.Contains(name)) dst.Add(name);
+                }
             }
 
             internal static int CopyWallFaces(

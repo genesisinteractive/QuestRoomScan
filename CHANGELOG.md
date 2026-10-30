@@ -6,6 +6,14 @@ All notable changes to this package are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `RoomScanSession.CopyHeadsetRoomLabels(List<string>)` and
+  `RoomScanSession.HeadsetRoomHasLabel(string)`: the Scene API labels
+  of the captured room the headset is in (`BED`, `TABLE`, `COUCH`, …),
+  for apps that adapt to the furniture of the room they run in. Backed by
+  `RoomUnderstanding.CopyLabelsOfRoomContaining`.
+
 ## [1.3.3] - 2026-10-29
 
 Keyframe manifests now read correctly on decimal-comma device locales, so

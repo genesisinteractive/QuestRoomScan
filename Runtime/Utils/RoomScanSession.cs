@@ -626,6 +626,45 @@ namespace Genesis.RoomScan
         }
 
         /// <summary>
+        /// Scene API labels of the captured room that contains the headset:
+        /// the names of <c>MRUKAnchor.SceneLabels</c> its anchors carry
+        /// (<c>BED</c>, <c>TABLE</c>, <c>COUCH</c>, <c>SCREEN</c>,
+        /// <c>WALL_FACE</c>, …), each once. Overlapping captures are unioned.
+        /// Empty in the editor and when the headset is not inside a captured
+        /// room. Clears <paramref name="dest"/>.
+        /// </summary>
+        public int CopyHeadsetRoomLabels(List<string> dest)
+        {
+            var u = Understanding();
+            if (u == null)
+            {
+                dest?.Clear();
+                return 0;
+            }
+            return u.CopyHeadsetRoomLabels(dest);
+        }
+
+        readonly List<string> _labelScratch = new List<string>();
+
+        /// <summary>
+        /// True when the captured room that contains the headset has an
+        /// anchor with this Scene API label (for example <c>"BED"</c>;
+        /// case-insensitive). False in the editor, when the headset is not
+        /// inside a captured room, and before the Scene API has loaded.
+        /// </summary>
+        public bool HeadsetRoomHasLabel(string label)
+        {
+            if (string.IsNullOrEmpty(label)) return false;
+            CopyHeadsetRoomLabels(_labelScratch);
+            for (int i = 0; i < _labelScratch.Count; i++)
+            {
+                if (string.Equals(_labelScratch[i], label, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            return false;
+        }
+
+        /// <summary>
         /// Scene API UUID of the loaded room that contains the headset
         /// (wall-plane test), or empty. Distinct from
         /// <see cref="BoundSceneRoomUuid"/> (the active scan package).
