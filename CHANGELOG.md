@@ -12,6 +12,9 @@ All notable changes to this package are documented here. The format follows
   refinement throws (for example a missing xatlas plugin), instead of waiting
   out its 5-minute timeout. New `RoomScanner.RefinementFailed` event carries
   the error message.
+- The setup wizard's macOS editor build of xatlas links against the newest
+  installed macOS SDK no newer than the running OS (a newer default SDK can be
+  unreadable to the installed linker) and builds both arm64 and x86_64.
 
 ### Added
 
