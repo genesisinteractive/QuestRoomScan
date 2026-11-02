@@ -6,6 +6,13 @@ All notable changes to this package are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- `RoomScanSession.FinalizeScanAsync` fails at once when on-device texture
+  refinement throws (for example a missing xatlas plugin), instead of waiting
+  out its 5-minute timeout. New `RoomScanner.RefinementFailed` event carries
+  the error message.
+
 ### Added
 
 - `RoomScanSession.CopyHeadsetRoomLabels(List<string>)` and

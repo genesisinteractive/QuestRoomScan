@@ -320,6 +320,12 @@ namespace Genesis.RoomScan
         public event Action<Mesh, Texture2D> RefinedMeshReady;
 
         /// <summary>
+        /// On-device texture refinement threw (its message). <see cref="RefinedMeshReady"/> will not fire for this run, so
+        /// anything waiting on it can stop waiting.
+        /// </summary>
+        public event Action<string> RefinementFailed;
+
+        /// <summary>
         /// Raised each frame a passthrough camera frame is fed to the volume integrator.
         /// Parameters: frame texture, camera pose, focal length, principal point, sensor resolution, current resolution.
         /// </summary>
@@ -1353,6 +1359,7 @@ namespace Genesis.RoomScan
             {
                 Logger.Error($"Texture refinement failed: {e.Message}\n{e.StackTrace}");
                 RefineStatus = "Failed";
+                RefinementFailed?.Invoke(e.Message);
             }
             finally
             {

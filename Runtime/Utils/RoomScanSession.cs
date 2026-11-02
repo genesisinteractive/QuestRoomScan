@@ -355,15 +355,21 @@ namespace Genesis.RoomScan
             {
                 var tcs = new TaskCompletionSource<bool>();
                 void OnReady(Mesh _, Texture2D __) => tcs.TrySetResult(true);
+                // A refinement that throws ends the wait at once (it used to sit out the whole timeout).
+                void OnFailed(string message) =>
+                    tcs.TrySetException(new InvalidOperationException("Texture refinement failed: " + message));
                 _scanner.RefinedMeshReady += OnReady;
+                _scanner.RefinementFailed += OnFailed;
                 _scanner.StartTextureRefinement();
 
                 var timeout = Task.Delay(TimeSpan.FromMinutes(5));
                 var completed = await Task.WhenAny(tcs.Task, timeout);
                 _scanner.RefinedMeshReady -= OnReady;
+                _scanner.RefinementFailed -= OnFailed;
 
                 if (completed == timeout)
                     throw new TimeoutException("Texture refinement timed out (5 min)");
+                await tcs.Task;
             }
 
             bool saved = await _scanner.SaveScanAsync();
