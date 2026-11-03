@@ -90,8 +90,12 @@ namespace Genesis.RoomScan
         public int ConfidentSurfaceCount;
         /// <summary>Total leak area, m². The number a host gates on ("under 0.3 m² still open").</summary>
         public float LeakAreaM2;
-        /// <summary>Surface area estimate, m².</summary>
+        /// <summary>Surface area estimate, m²: the larger of the free–solid face count and the surface band's
+        /// voxel estimate.</summary>
         public float SurfaceAreaM2;
+        /// <summary>The leak stopped shrinking near the end of the scan (a window, a mirror, a black screen that
+        /// depth cannot close): holes up to the integrator's stall cap are being capped so the scan can finish.</summary>
+        public bool LeakStalled;
         /// <summary>Leak patches at or above the minimum area.</summary>
         public int HoleCount;
         /// <summary>Largest leak patch (the frontier while scanning), or default.</summary>
@@ -623,7 +627,9 @@ namespace Genesis.RoomScan
                     Logger.Info(
                         $"[RoomScanner] Analysis: progress={_volumeIntegrator.Progress:P0} closure={cl.Closure:P0} " +
                         $"refinement={_volumeIntegrator.Refinement:P0} (confident {_volumeIntegrator.ConfidentFraction:P0}) " +
-                        $"leak={cl.LeakAreaM2:F2}m2 surface={cl.SurfaceAreaM2:F1}m2 holes={cl.HoleCount} " +
+                        $"leak={cl.LeakAreaM2:F2}m2 surface={cl.SurfaceAreaM2:F1}m2 (faces {_volumeIntegrator.FaceSurfaceAreaM2:F1} " +
+                        $"band {_volumeIntegrator.BandSurfaceAreaM2:F1} sealedU {_volumeIntegrator.SealedUnknownFaces}) holes={cl.HoleCount} " +
+                        (_volumeIntegrator.LeakStalled ? "STALLED (capping) " : "") +
                         $"largest={cl.LargestHole.AreaM2:F2}m2 (~{cl.LargestHole.ApproxWidthMetres:F2}m across) " +
                         $"@({cl.LargestHole.Center.x:F2},{cl.LargestHole.Center.y:F2},{cl.LargestHole.Center.z:F2}) " +
                         $"faces: leak={cl.LeakFaces} cut={cl.CutFaces} " +
@@ -2117,6 +2123,7 @@ namespace Genesis.RoomScan
                 cov.HoleCount = cl.HoleCount;
                 cov.LargestHole = cl.LargestHole;
                 cov.LeakFills = _volumeIntegrator.LeakFills;
+                cov.LeakStalled = _volumeIntegrator.LeakStalled;
             }
 
             if (_shellTracker != null && _shellTracker.Available)

@@ -8,6 +8,17 @@ All notable changes to this package are documented here. The format follows
 
 ### Fixed
 
+- Scan progress could stop short of complete in a fully scanned room. The
+  analysis skipped free voxels in blocks holding nothing else, so a surface lying
+  exactly on an 8-voxel block edge (the floor at height 0, any wall that lands
+  on one) stopped counting once the air in front of it was observed: a closed
+  room read a fraction of its surface and its closure stayed low. Free blocks
+  next to a solid or unknown block are visited now. Closure also uses the larger
+  of the face count and a voxel estimate of the surface band
+  (`VolumeIntegrator.FaceSurfaceAreaM2`, `BandSurfaceAreaM2`).
+- Small holes were capped on one face direction only: a leak face's direction was
+  stored as a denormal float, which the GPU may flush to zero, so every face read
+  as +x and the fill wrote nothing where the hole faced another way.
 - `RoomScanSession.FinalizeScanAsync` fails at once when on-device texture
   refinement throws (for example a missing xatlas plugin), instead of waiting
   out its 5-minute timeout. New `RoomScanner.RefinementFailed` event carries
@@ -18,6 +29,15 @@ All notable changes to this package are documented here. The format follows
 
 ### Added
 
+- Stalled holes are capped: when the leak has not shrunk for `stallSeconds`
+  (20) near the end of a scan (total leak at most `stallMaxLeakM2`, 2 m²), holes
+  up to `stallFillMaxAreaM2` (1 m²) each get the same cap as small holes, so a
+  window, a mirror or a black screen that depth cannot close no longer keeps a
+  scan from finishing. `ScanCoverage.LeakStalled` / `VolumeIntegrator.LeakStalled`
+  report it.
+- Editor check of the scan analysis on synthetic rooms (Tools → Room Scan →
+  Check Scan Analysis): surfaces on and off block edges, frozen, thin, holed,
+  turned, and a stalled window, each compared with a CPU count.
 - Freeze preview: `RoomScanSession.SetFreezePreview(slot, origin, direction,
   halfAngleDegrees, maxMetres, color)` and `ClearFreezePreview(slot)` light the
   live mesh's surfaces that a `FreezeInView` / `UnfreezeInView` with the same
