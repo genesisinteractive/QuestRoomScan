@@ -277,8 +277,8 @@ namespace Genesis.RoomScan
         /// Paints the voxels inside a spotlight cone from the head (half-angle
         /// <see cref="FreezeConeHalfAngle"/>) as "frozen" — they stop receiving
         /// integration updates until the user explicitly
-        /// <see cref="UnfreezeInView"/>s them. Frozen voxels count as refined,
-        /// so painting a settled region locks its share of progress.
+        /// <see cref="UnfreezeInView"/>s them. Their geometry and colour stay
+        /// exactly as they are; progress is unchanged (it has no frozen term).
         /// Integration keeps running on un-painted regions. The debug menu
         /// uses this head cone. Hosts with their own emitter should call the
         /// overload.
@@ -299,6 +299,25 @@ namespace Genesis.RoomScan
         {
             if (_scanner == null) { Logger.Error("RoomScanSession: RoomScanner not found"); return; }
             _scanner.FreezeInView(origin, direction, halfAngleDegrees, maxMetres);
+        }
+
+        /// <summary>
+        /// Show which surfaces a freeze (or unfreeze) with this cone would paint, before it is painted: the live
+        /// mesh lights them in <paramref name="color"/> (alpha = strength). Two slots (0 draws on top of 1), e.g. one
+        /// per hand. Cheap (shader globals); call every frame the cone moves, <see cref="ClearFreezePreview"/> to hide.
+        /// </summary>
+        public void SetFreezePreview(int slot, Vector3 origin, Vector3 direction, float halfAngleDegrees,
+            float maxMetres, Color color)
+        {
+            if (_scanner == null) return;
+            _scanner.SetFreezePreview(slot, origin, direction, halfAngleDegrees, maxMetres, color);
+        }
+
+        /// <summary>Hide a freeze preview (<see cref="SetFreezePreview"/>).</summary>
+        public void ClearFreezePreview(int slot)
+        {
+            if (_scanner == null) return;
+            _scanner.ClearFreezePreview(slot);
         }
 
         /// <summary>Half-angle, degrees, of the default head freeze cone.</summary>

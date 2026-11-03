@@ -239,6 +239,33 @@ namespace Genesis.RoomScan
         //  Public read-only state
         // ─────────────────────────────────────────────────────────────
 
+        /// <summary>How many freeze preview cones the live mesh can show at once (<see cref="SetFreezePreview"/>).</summary>
+        public const int FreezePreviewSlots = 2;
+
+        /// <summary>
+        /// Light the live mesh's surfaces inside a cone: what a <see cref="FreezeInView(Vector3, Vector3, float, float)"/>
+        /// or <see cref="UnfreezeInView(Vector3, Vector3, float, float)"/> with the same cone would paint, shown before it
+        /// is painted. <paramref name="slot"/> 0 or 1 (slot 0 draws on top); <paramref name="color"/>'s alpha is the
+        /// strength. Stays until changed or <see cref="ClearFreezePreview"/>; shader globals only, no volume work.
+        /// </summary>
+        public void SetFreezePreview(int slot, Vector3 origin, Vector3 direction, float halfAngleDegrees, float maxMetres,
+            Color color)
+        {
+            if (slot < 0 || slot >= FreezePreviewSlots) return;
+            Vector3 axis = direction.sqrMagnitude > 1e-8f ? direction.normalized : Vector3.forward;
+            float cos = Mathf.Cos(Mathf.Clamp(halfAngleDegrees, 0.5f, 89f) * Mathf.Deg2Rad);
+            Shader.SetGlobalVector(PreviewAID[slot], new Vector4(origin.x, origin.y, origin.z, cos));
+            Shader.SetGlobalVector(PreviewBID[slot], new Vector4(axis.x, axis.y, axis.z, Mathf.Max(0f, maxMetres)));
+            Shader.SetGlobalVector(PreviewCID[slot], new Vector4(color.r, color.g, color.b, Mathf.Clamp01(color.a)));
+        }
+
+        /// <summary>Hide a freeze preview cone (<see cref="SetFreezePreview"/>).</summary>
+        public void ClearFreezePreview(int slot)
+        {
+            if (slot < 0 || slot >= FreezePreviewSlots) return;
+            Shader.SetGlobalVector(PreviewCID[slot], Vector4.zero);
+        }
+
         /// <summary>Toggle blue tint overlay on frozen voxels in live mesh modes.</summary>
         public bool ShowFreezeTint
         {
@@ -2144,6 +2171,7 @@ namespace Genesis.RoomScan
             Shader.SetGlobalFloat(WireThicknessID, wireThickness);
             Shader.SetGlobalFloat(NoFreezeTintID, showFreezeTint ? 0f : 1f);
             Shader.SetGlobalFloat(ShowHolesID, _showHoles ? 1f : 0f);
+            for (int i = 0; i < FreezePreviewSlots; i++) ClearFreezePreview(i);
         }
 
         private int _colorFrameLog;
@@ -2211,6 +2239,12 @@ namespace Genesis.RoomScan
         }
 
         private static readonly int NoFreezeTintID = Shader.PropertyToID("_RSNoFreezeTint");
+        private static readonly int[] PreviewAID =
+            { Shader.PropertyToID("_RSPreviewCone0A"), Shader.PropertyToID("_RSPreviewCone1A") };
+        private static readonly int[] PreviewBID =
+            { Shader.PropertyToID("_RSPreviewCone0B"), Shader.PropertyToID("_RSPreviewCone1B") };
+        private static readonly int[] PreviewCID =
+            { Shader.PropertyToID("_RSPreviewCone0C"), Shader.PropertyToID("_RSPreviewCone1C") };
         private static readonly int ShowHolesID = Shader.PropertyToID("_RSShowHoles");
         private static readonly int TriAvailableID = Shader.PropertyToID("_RSTriAvailable");
         private static readonly int WireframeID = Shader.PropertyToID("_RSWireframe");

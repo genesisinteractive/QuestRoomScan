@@ -18,6 +18,11 @@ All notable changes to this package are documented here. The format follows
 
 ### Added
 
+- Freeze preview: `RoomScanSession.SetFreezePreview(slot, origin, direction,
+  halfAngleDegrees, maxMetres, color)` and `ClearFreezePreview(slot)` light the
+  live mesh's surfaces that a `FreezeInView` / `UnfreezeInView` with the same
+  cone would paint, before it is painted (two slots, e.g. one per hand; shader
+  globals only, no volume work).
 - `RoomScanSession.CopyHeadsetRoomLabels(List<string>)` and
   `RoomScanSession.HeadsetRoomHasLabel(string)`: the Scene API labels
   of the captured room the headset is in (`BED`, `TABLE`, `COUCH`, …),

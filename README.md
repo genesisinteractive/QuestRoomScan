@@ -768,6 +768,8 @@ Everything a game needs lives on one component. `[RequireComponent(typeof(RoomSc
 | `FreezeInView(origin, direction, halfAngleDegrees, maxMetres)` | `void` | Same paint, host-supplied cone. `maxMetres` 0 is unbounded |
 | `UnfreezeInView()` | `void` | Inverse of `FreezeInView` for re-capture of bad regions |
 | `UnfreezeInView(origin, direction, halfAngleDegrees, maxMetres)` | `void` | Inverse of the custom-cone freeze |
+| `SetFreezePreview(slot, origin, direction, halfAngleDegrees, maxMetres, color)` | `void` | Light the live mesh's surfaces inside that cone (what a freeze or unfreeze with it would paint) before painting; slots 0 and 1, alpha is strength |
+| `ClearFreezePreview(slot)` | `void` | Hide a freeze preview |
 | `FinalizeScanAsync()` | `Task<ScanResult>` | Stop scanning → refine → save; returns mesh + atlas + package id + `AnchorFrameMesh`. Releases the live TSDF when `PresentRefinedWhenReady` is true |
 | `PresentRefinedWhenReady` | `bool` | True (default): finalize presents the refined mesh and releases the live TSDF. False: bake into memory and keep the live vertex mesh until the host presents |
 | `SetRefinedBackfaceCull(cullBack)` | `void` | Two-sided in the room, `Cull Back` outside (`RefinedMeshBackface.shader`). Quest ignores ShaderLab `Cull [_Cull]` |
