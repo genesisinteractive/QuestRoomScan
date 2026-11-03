@@ -333,7 +333,7 @@ QuestRoomScan captures keyframes and a dense point cloud during scanning, upload
 
 ### On-Device Capture (automatic during scanning)
 
-- **KeyframeCollector**: Motion-gated JPEG frames + camera poses saved directly into the active scan package (`keyframes/images/*.jpg`, `keyframes/frames.jsonl`). Captures are triggered by camera movement — you get more keyframes by looking at the room from different angles.
+- **KeyframeCollector**: Motion-gated JPEG frames + camera poses saved directly into the active scan package (`keyframes/images/*.jpg`, `keyframes/frames.jsonl`). Captures are triggered by camera movement — you get more keyframes by looking at the room from different angles. Each keyframe records the head turn speed at capture (`"av"`, deg/s); a pose covered only by fast-turn (smeared) keyframes is captured once more when the head holds still on it (`sharpRetakeDegPerSec`, default 15).
 - **PointCloudExporter**: GPU mesh vertices exported as binary PLY (`points3d.ply`) via `AsyncGPUReadback`. Exported on demand — automatically before GS training upload, or manually via the debug menu's Tools view.
 
 ### Server Training (via [RoomScan-GaussianSplatServer](https://github.com/genesisinteractive/RoomScan-GaussianSplatServer))
@@ -726,6 +726,8 @@ Set `TextureRefinement.postBakeSimplificationRatio` in the Inspector (default **
 #### Keyframe Registration and Chart-Consistent Blend
 
 `refineKeyframePoses` (default on) aligns each keyframe to the first-pass atlas with a low-resolution ZNCC image shift and folds it into the keyframe rotation before blending. `chartBestViewBoost` (default 3) lets the view that scores best over a whole UV chart carry that chart, moving view switches to chart borders. See ALGORITHM.md §15.1a–b.
+
+`weighBySharpness` (default on) scales every keyframe's view score by `1 / (1 + (speed / sharpHalfDegPerSec)²)` (half weight at 25 deg/s, floor `sharpMinWeight` 0.05), from the head speed recorded at capture or, in older packages, the turn between neighbouring keyframes. A steady view wins a surface; a photo smeared by a fast turn only fills what no steady view saw. Scanning in a dim room (longer exposure) makes this matter most.
 
 ### `RoomScanSession` API Surface
 

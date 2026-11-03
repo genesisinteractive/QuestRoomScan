@@ -26,8 +26,29 @@ All notable changes to this package are documented here. The format follows
 - The setup wizard's macOS editor build of xatlas links against the newest
   installed macOS SDK no newer than the running OS (a newer default SDK can be
   unreadable to the installed linker) and builds both arm64 and x86_64.
+- Texture refinement no longer lets photos taken during a fast head turn win a
+  surface. A quick scan in a dim room (10 ms exposure) saved most keyframes
+  while turning at 40-80 deg/s; they won texels as often as steady ones, so the
+  atlas came out smeared and doubled. Each keyframe's view score is now weighed
+  by how still the head was (`weighBySharpness`, half weight at
+  `sharpHalfDegPerSec` 25, floor `sharpMinWeight` 0.05): a steady view wins and
+  a smeared one only fills what no steady view saw. Older packages use the turn
+  to the neighbouring keyframes. The blend pass keeps more precision in its
+  weights so the lower scores still blend smoothly.
+- `KeyframeCollector` measures head speed from one camera frame to the next on
+  every frame, timed by the camera's own clock when the provider implements
+  `ICameraFrameTiming`. It used to average it over the capture interval.
 
 ### Added
+
+- Keyframes record the head turn speed at capture (`"av"`, deg/s, in
+  `frames.jsonl`). A pose already covered only by fast-turn keyframes is
+  captured again when the head holds still on it (`sharpRetakeDegPerSec`, 15;
+  at most one retake per pose). `KeyframeCollector.SharpRetakes` counts them.
+- Editor checks: Tools → Room Scan → Re-bake Package Atlas re-bakes a pulled
+  scan package in Play from its own keyframes (all, or filtered by hand
+  footprint or head speed). Check Keyframe Steady Retakes drives the collector
+  with a fast sweep and a slow one.
 
 - Stalled holes are capped: when the leak has not shrunk for `stallSeconds`
   (20) near the end of a scan (total leak at most `stallMaxLeakM2`, 2 m²), holes

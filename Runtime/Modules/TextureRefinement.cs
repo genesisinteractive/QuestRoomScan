@@ -122,6 +122,20 @@ namespace Genesis.RoomScan
         [Range(0.05f, 0.9f)]
         [SerializeField] internal float registrationMinNcc = 0.25f;
 
+        [Header("Motion Blur")]
+        [Tooltip("Weigh each keyframe's view score by how still the head was when it was taken, so a steady view of a " +
+                 "surface wins over a smeared one taken during a fast turn, and a smeared one only fills what no steady " +
+                 "view saw. Speed comes from the collector's \"av\" (deg/s at capture), or for older packages from the " +
+                 "neighbouring keyframes' poses.")]
+        [SerializeField] internal bool weighBySharpness = true;
+        [Tooltip("Head turn speed (deg/s) at which a keyframe counts half. At a 10 ms exposure and Quest 3 focal " +
+                 "length, 25 deg/s is a smear of about 4 px; 60 deg/s about 9 px.")]
+        [Range(5f, 120f)]
+        [SerializeField] internal float sharpHalfDegPerSec = 25f;
+        [Tooltip("Lowest weight a fast keyframe falls to: it still fills a surface no steadier view saw.")]
+        [Range(0.01f, 1f)]
+        [SerializeField] internal float sharpMinWeight = 0.05f;
+
         [Header("Exposure Equalisation")]
         [Tooltip("With registration on, measure each keyframe's colour against the pass-1 atlas (now the working-distance winner) and scale the photo to match before blending. Close-up auto-exposure no longer sets room brightness.")]
         [SerializeField] internal bool equalizeExposure = true;
@@ -476,6 +490,13 @@ namespace Genesis.RoomScan
             /// <summary>RGB exposure gain toward the pass-1 atlas, set by registration; zero = unset (1).</summary>
             public Vector3 Gain;
             public Vector4 GainOrOne => Gain == Vector3.zero ? Vector4.one : new Vector4(Gain.x, Gain.y, Gain.z, 1f);
+            /// <summary>Capture time (s, "ts").</summary>
+            public float Ts;
+            /// <summary>Head turn speed at capture (deg/s, "av"); negative = not recorded.</summary>
+            public float AngVel;
+            /// <summary>View-score multiplier from <see cref="ApplySharpnessWeights"/>; zero = unset (1).</summary>
+            public float Weight;
+            public float WeightOrOne => Weight > 0f ? Weight : 1f;
         }
 
         const int BodyCapMax = 8;
@@ -627,6 +648,58 @@ namespace Genesis.RoomScan
             return metaList;
         }
 
+        /// <summary>
+        /// Set each keyframe's <see cref="Keyframe.Weight"/> from how fast the head turned when it was taken:
+        /// <c>1 / (1 + (speed / sharpHalfDegPerSec)²)</c>, floored at <see cref="sharpMinWeight"/>. The speed is the
+        /// collector's own measurement at capture ("av") when the package has it; otherwise the turn to the
+        /// neighbouring keyframes over the time between them (the larger side, neighbours within a second only), an
+        /// average that reads a short fast flick as slower than it was. No speed at all keeps weight 1.
+        /// </summary>
+        void ApplySharpnessWeights(System.Collections.Generic.List<Keyframe> list)
+        {
+            if (!weighBySharpness || list.Count == 0) return;
+            int fromCapture = 0, fromNeighbours = 0, unknown = 0, low = 0;
+            var speeds = new System.Collections.Generic.List<float>(list.Count);
+            var weights = new System.Collections.Generic.List<float>(list.Count);
+            float Speed(in Keyframe a, in Keyframe b)
+            {
+                float dt = Mathf.Abs(a.Ts - b.Ts);
+                return dt < 1e-3f || dt > 1f ? -1f : Quaternion.Angle(a.Rotation, b.Rotation) / dt;
+            }
+            for (int i = 0; i < list.Count; i++)
+            {
+                var kf = list[i];
+                float speed = kf.AngVel;
+                if (speed >= 0f) fromCapture++;
+                else
+                {
+                    if (i > 0) speed = Mathf.Max(speed, Speed(kf, list[i - 1]));
+                    if (i + 1 < list.Count) speed = Mathf.Max(speed, Speed(kf, list[i + 1]));
+                    if (speed >= 0f) fromNeighbours++;
+                }
+                if (speed < 0f)
+                {
+                    unknown++;
+                    kf.Weight = 1f;
+                }
+                else
+                {
+                    float r = speed / Mathf.Max(1f, sharpHalfDegPerSec);
+                    kf.Weight = Mathf.Max(sharpMinWeight, 1f / (1f + r * r));
+                    speeds.Add(speed);
+                }
+                if (kf.Weight < 0.25f) low++;
+                weights.Add(kf.Weight);
+                list[i] = kf;
+            }
+            speeds.Sort();
+            weights.Sort();
+            float Median(System.Collections.Generic.List<float> v) => v.Count == 0 ? 0f : v[v.Count / 2];
+            Logger.Info($"[TextureRefine] Sharpness: {list.Count} keyframes, head speed median {Median(speeds):F0} deg/s " +
+                        $"(at capture {fromCapture}, from neighbours {fromNeighbours}, unknown {unknown}); weight median " +
+                        $"{Median(weights):F2}, {low} below 0.25 (half at {sharpHalfDegPerSec:F0} deg/s, floor {sharpMinWeight:F2})");
+        }
+
         /// <summary>"x y z x y z r;..." as written by the keyframe collector.</summary>
         static void ParseBodyCapsules(string caps, ref Keyframe kf)
         {
@@ -665,6 +738,7 @@ namespace Genesis.RoomScan
             int sw = 0, sh = 0;
             string caps = null;
             float sceneZ = 0;
+            float ts = 0, av = -1;
 
             foreach (string token in jsonLine.Trim('{', '}', ' ').Split(','))
             {
@@ -677,6 +751,8 @@ namespace Genesis.RoomScan
                     case "cap": caps = val; break;
                     case "z": sceneZ = float.Parse(val, System.Globalization.CultureInfo.InvariantCulture); break;
                     case "id": id = int.Parse(val); break;
+                    case "ts": ts = float.Parse(val, System.Globalization.CultureInfo.InvariantCulture); break;
+                    case "av": av = float.Parse(val, System.Globalization.CultureInfo.InvariantCulture); break;
                     case "px": px = float.Parse(val, System.Globalization.CultureInfo.InvariantCulture); break;
                     case "py": py = float.Parse(val, System.Globalization.CultureInfo.InvariantCulture); break;
                     case "pz": pz = float.Parse(val, System.Globalization.CultureInfo.InvariantCulture); break;
@@ -700,6 +776,8 @@ namespace Genesis.RoomScan
             kf.SensorWidth = sw;
             kf.SensorHeight = sh;
             kf.SceneZ = sceneZ;
+            kf.Ts = ts;
+            kf.AngVel = av;
             ParseBodyCapsules(caps, ref kf);
 
             string imgPath = Path.Combine(imagesDir, $"{id:D6}.jpg");
@@ -734,6 +812,7 @@ namespace Genesis.RoomScan
             var metaList = await Task.Run(() => ParseKeyframeManifest(keyframeDir, relocation));
             if (metaList.Count == 0)
                 throw new InvalidOperationException("No keyframes available for baking");
+            ApplySharpnessWeights(metaList);
             manifestScope?.Dispose();
             await NextFrame();
 
@@ -1006,7 +1085,9 @@ namespace Genesis.RoomScan
                     Logger.Info($"[TextureRefine] Registration: {reg.Refined} refined, {reg.Rejected} rejected, " +
                                 $"mean shift {(reg.Refined > 0 ? reg.SumShiftPx / reg.Refined : 0f):F1} px, " +
                                 $"max {reg.MaxShiftPx:F1} px (radius ±{reg.Radius * reg.Scale} px, minNcc {registrationMinNcc:F2}); " +
-                                $"exposure gain on {reg.Gained} keyframes, luma {reg.MinGain:F2}..{reg.MaxGain:F2}");
+                                $"exposure gain on {reg.Gained} keyframes, luma {reg.MinGain:F2}..{reg.MaxGain:F2}; " +
+                                $"mean sharpness weight refined {(reg.Refined > 0 ? reg.RefinedWeight / reg.Refined : 0f):F2}, " +
+                                $"rejected {(reg.Rejected > 0 ? reg.RejectedWeight / reg.Rejected : 0f):F2}");
                 }
 
                 // Resolve: divide accumulated colors by weights → final atlas
@@ -1554,6 +1635,7 @@ namespace Genesis.RoomScan
             compute.SetFloat("_CropY", cropY * scale);
             compute.SetInt("_ImgW", Mathf.Max(1, Mathf.RoundToInt(kf.Width * scale)));
             compute.SetInt("_ImgH", Mathf.Max(1, Mathf.RoundToInt(kf.Height * scale)));
+            compute.SetFloat("_KfWeight", kf.WeightOrOne);
         }
 
         // ═══════════════════════════════════════════════════════════════
@@ -1572,6 +1654,7 @@ namespace Genesis.RoomScan
             public ComputeBuffer DepthLow, ViewLum, KfLum, MatchOut, GainSums;
             public int LowW, LowH;
             public int Refined, Rejected, Gained;
+            public float RefinedWeight, RejectedWeight;
             public float SumShiftPx, MaxShiftPx, MinGain = 1f, MaxGain = 1f;
 
             public RegistrationScratch(int scale, int radius)
@@ -1696,6 +1779,7 @@ namespace Genesis.RoomScan
             if (!BestShift(scores, side, registrationMinNcc, out Vector2 shiftLow, out float ncc))
             {
                 s.Rejected++;
+                s.RejectedWeight += kf.WeightOrOne;
                 return kf;
             }
 
@@ -1704,12 +1788,14 @@ namespace Genesis.RoomScan
             if (Mathf.Abs(shiftLow.x) >= s.Radius - 0.5f || Mathf.Abs(shiftLow.y) >= s.Radius - 0.5f)
             {
                 s.Rejected++;
+                s.RejectedWeight += kf.WeightOrOne;
                 return kf;
             }
 
             Vector2 shiftPx = shiftLow * s.Scale;
             kf.Rotation = ApplyImageShift(kf.Rotation, shiftPx, new Vector2(kf.Fx, kf.Fy));
             s.Refined++;
+            s.RefinedWeight += kf.WeightOrOne;
             float mag = shiftPx.magnitude;
             s.SumShiftPx += mag;
             if (mag > s.MaxShiftPx) s.MaxShiftPx = mag;
@@ -1799,6 +1885,7 @@ namespace Genesis.RoomScan
             var metaList = ParseKeyframeManifest(keyframeDir, keyframeRelocation);
             if (metaList.Count == 0)
                 throw new InvalidOperationException("No keyframes available for baking");
+            ApplySharpnessWeights(metaList);
 
             Logger.Info($"[TextureRefine] Found {metaList.Count} keyframes" +
                 (keyframeRelocation != Matrix4x4.identity ? " (relocated)" : ""));
@@ -1957,7 +2044,7 @@ namespace Genesis.RoomScan
                     continue;
 
                 float dist = Vector3.Distance(camPos, centroid);
-                float score = ViewScore(dot, dist, kf.Fx);
+                float score = ViewScore(dot, dist, kf.Fx) * kf.WeightOrOne;
 
                 RasterizeTriangle(atlas, bestScore, atlasW, atlasH,
                     u0, v0, u1, v1, u2, v2,
