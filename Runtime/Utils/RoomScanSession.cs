@@ -634,6 +634,25 @@ namespace Genesis.RoomScan
         }
 
         /// <summary>
+        /// The headset is in the active package's bound room, or no more than
+        /// <paramref name="outsideToleranceMetres"/> past its outer walls, floor or ceiling.
+        /// <see cref="IsHeadsetInsideBoundSceneRoom"/> counts a head within 8 cm of a wall as outside (a doorway is not
+        /// the room); use this one for "has the player walked out", where leaning on a wall must not count. False when
+        /// no package is loaded or the bound UUID cannot be resolved. Editor is always true.
+        /// </summary>
+        public bool IsHeadsetWithinBoundSceneRoom(float outsideToleranceMetres)
+        {
+            if (Application.isEditor)
+                return true;
+            if (_persistence == null || !_persistence.HasActivePackage)
+                return false;
+            Guid uuid = BoundSceneRoomUuid;
+            if (uuid == Guid.Empty) return false;
+            var u = Understanding();
+            return u != null && u.IsHeadsetInsideRoom(uuid, outsideToleranceMetres);
+        }
+
+        /// <summary>
         /// Vertical Scene API planes of every loaded room that contains
         /// the headset. <paramref name="kind"/> is the labels the host
         /// wants. Empty in the editor and when the headset is not inside

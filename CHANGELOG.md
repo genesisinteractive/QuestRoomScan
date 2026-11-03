@@ -6,6 +6,15 @@ All notable changes to this package are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `RoomScanSession.IsHeadsetWithinBoundSceneRoom(outsideToleranceMetres)` and
+  `RoomUnderstanding.IsHeadsetInsideRoom(uuid, outsideToleranceMetres)`: the
+  headset still counts as in the room up to that far past its outer walls,
+  floor and ceiling. The strict test counts a head within 8 cm of a wall as
+  outside (so a doorway is not the room); for "has the player walked out", a
+  head leaning on a wall must not count.
+
 ## [1.4.0] - 2026-11-04
 
 Scan textures line up again on current headsets, a fully scanned room reaches

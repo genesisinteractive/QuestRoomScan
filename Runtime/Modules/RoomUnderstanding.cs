@@ -210,6 +210,24 @@ namespace Genesis.RoomScan
             return Query.Contains(room, Query.HeadsetWorldPosition());
         }
 
+        /// <summary>
+        /// Like <see cref="IsHeadsetInsideRoom(Guid)"/>, but the headset still counts as in the room up to
+        /// <paramref name="outsideToleranceMetres"/> past its outer walls, floor and ceiling. The strict test counts a
+        /// head within 8 cm of a wall as outside (so a doorway is not a room); for "has the player left this room", a
+        /// head leaning on a wall, or a wall plane a little inside the plaster, must not read as leaving. Editor
+        /// returns true.
+        /// </summary>
+        public bool IsHeadsetInsideRoom(Guid sceneRoomUuid, float outsideToleranceMetres)
+        {
+            if (outsideToleranceMetres <= 0f) return IsHeadsetInsideRoom(sceneRoomUuid);
+            if (Application.isEditor) return true;
+            if (sceneRoomUuid == Guid.Empty) return false;
+            EnsureMruk();
+            if (_mruk == null || _mruk.Rooms == null) return false;
+            var room = Query.FindByUuid(_mruk.Rooms, sceneRoomUuid);
+            return Query.ContainsWithin(room, Query.HeadsetWorldPosition(), outsideToleranceMetres);
+        }
+
         /// <summary>True when a loaded MRUK room still has this Scene API UUID.</summary>
         public bool HasRoom(Guid sceneRoomUuid)
         {
@@ -765,6 +783,20 @@ namespace Genesis.RoomScan
                 return InsideOuterWalls(room, worldPos);
             }
 
+            /// <summary>Inside the room's bounds and outer walls, each pushed <paramref name="tolerance"/> metres
+            /// outward (the floor outline is not used: a head over a wall's line is past the outline too).</summary>
+            internal static bool ContainsWithin(MRUKRoom room, Vector3 worldPos, float tolerance)
+            {
+                if (room == null) return false;
+                var bounds = room.GetRoomBounds();
+                if (bounds.size.sqrMagnitude > 1e-6f)
+                {
+                    bounds.Expand(2f * tolerance);
+                    if (!bounds.Contains(worldPos)) return false;
+                }
+                return InsideOuterWalls(room, worldPos, -tolerance);
+            }
+
             internal static MRUKRoom FindContaining(IList<MRUKRoom> rooms, Vector3 worldPos)
             {
                 if (rooms == null) return null;
@@ -968,7 +1000,12 @@ namespace Genesis.RoomScan
                 return inward;
             }
 
-            static bool InsideOuterWalls(MRUKRoom room, Vector3 worldPos)
+            static bool InsideOuterWalls(MRUKRoom room, Vector3 worldPos) =>
+                InsideOuterWalls(room, worldPos, OuterWallInsetMetres);
+
+            /// <summary>Inward of every outer wall by at least <paramref name="inset"/> metres (negative: allowed
+            /// that far outside).</summary>
+            static bool InsideOuterWalls(MRUKRoom room, Vector3 worldPos, float inset)
             {
                 var anchors = room.Anchors;
                 if (anchors == null || anchors.Count == 0)
@@ -981,7 +1018,7 @@ namespace Genesis.RoomScan
                     if (!a.HasAnyLabel(OuterWallLabels)) continue;
 
                     if (Vector3.Dot(worldPos - a.transform.position, Inward(room, a))
-                        < OuterWallInsetMetres)
+                        < inset)
                         return false;
                 }
 
