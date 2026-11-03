@@ -8,6 +8,18 @@ All notable changes to this package are documented here. The format follows
 
 ### Fixed
 
+- Texture refinement projected every keyframe photo at the wrong size when the
+  camera reports a sensor larger than the photo. Passthrough Camera Access
+  delivers the largest centred sensor region with the photo's aspect, scaled to
+  the photo size; the bake treated the photo as a centre crop at sensor scale.
+  With a 1728² sensor and 1280×960 photos (what the current SDK reports) that is
+  a 35 % focal error: textures landed doubled and torn, and registration
+  rejected most keyframes (54 of 255 aligned on one scan; 244 after the fix).
+  `TextureRefinement.ImageIntrinsics` now applies the same crop-and-scale as the
+  live colour projection, in the GPU and CPU bakes, the occlusion raster and
+  registration's pixel-to-angle step. When the sensor reports the photo's width
+  the two models agree, so earlier scans bake as before. The bake logs the
+  camera model once (`[TextureRefine] Camera: sensor … → image …`).
 - Scan progress could stop short of complete in a fully scanned room. The
   analysis skipped free voxels in blocks holding nothing else, so a surface lying
   exactly on an 8-voxel block edge (the floor at height 0, any wall that lands
@@ -29,7 +41,7 @@ All notable changes to this package are documented here. The format follows
 - Texture refinement no longer lets photos taken during a fast head turn win a
   surface. A quick scan in a dim room (10 ms exposure) saved most keyframes
   while turning at 40-80 deg/s; they won texels as often as steady ones, so the
-  atlas came out smeared and doubled. Each keyframe's view score is now weighed
+  atlas came out smeared (the doubling on that scan was the camera model above). Each keyframe's view score is now weighed
   by how still the head was (`weighBySharpness`, half weight at
   `sharpHalfDegPerSec` 25, floor `sharpMinWeight` 0.05): a steady view wins and
   a smeared one only fills what no steady view saw. Older packages use the turn
@@ -47,8 +59,11 @@ All notable changes to this package are documented here. The format follows
   at most one retake per pose). `KeyframeCollector.SharpRetakes` counts them.
 - Editor checks: Tools → Room Scan → Re-bake Package Atlas re-bakes a pulled
   scan package in Play from its own keyframes (all, or filtered by hand
-  footprint or head speed). Check Keyframe Steady Retakes drives the collector
-  with a fast sweep and a slow one.
+  footprint or head speed). Render Baked Atlas From Keyframes renders the
+  package's mesh with a baked atlas (or its bare geometry) through chosen
+  keyframes' cameras beside their photos, with a render-to-photo correlation
+  per view. Check Keyframe Steady Retakes drives the collector with a fast
+  sweep and a slow one.
 
 - Stalled holes are capped: when the leak has not shrunk for `stallSeconds`
   (20) near the end of a scan (total leak at most `stallMaxLeakM2`, 2 m²), holes

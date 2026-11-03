@@ -655,6 +655,8 @@ namespace Genesis.RoomScan
         /// neighbouring keyframes over the time between them (the larger side, neighbours within a second only), an
         /// average that reads a short fast flick as slower than it was. No speed at all keeps weight 1.
         /// </summary>
+        bool _cameraModelLogged;
+
         void ApplySharpnessWeights(System.Collections.Generic.List<Keyframe> list)
         {
             if (!weighBySharpness || list.Count == 0) return;
@@ -813,6 +815,7 @@ namespace Genesis.RoomScan
             if (metaList.Count == 0)
                 throw new InvalidOperationException("No keyframes available for baking");
             ApplySharpnessWeights(metaList);
+            _cameraModelLogged = false;
             manifestScope?.Dispose();
             await NextFrame();
 
@@ -1446,6 +1449,14 @@ namespace Genesis.RoomScan
                     var kf = metaList[i];
                     kf.Width = tex.width;
                     kf.Height = tex.height;
+                    if (!_cameraModelLogged)
+                    {
+                        _cameraModelLogged = true;
+                        Vector4 ic = ImageIntrinsics(kf);
+                        Logger.Info($"[TextureRefine] Camera: sensor {kf.SensorWidth}x{kf.SensorHeight} fx {kf.Fx:F1} " +
+                                    $"→ image {kf.Width}x{kf.Height} fx {ic.x:F1} cx {ic.z:F1} cy {ic.w:F1} " +
+                                    $"(scale {ic.x / Mathf.Max(kf.Fx, 1e-3f):F3})");
+                    }
                     sw.Restart();
                     if (refine != null)
                     {
@@ -1613,26 +1624,45 @@ namespace Genesis.RoomScan
         }
 
         /// <summary>
+        /// A keyframe's intrinsics in its own image's pixels: (fx, fy, cx, cy). The recorded ones are the sensor's;
+        /// the camera delivers the largest centred sensor region with the image's aspect, scaled to the image size
+        /// (Meta's <c>PassthroughCameraAccess.CalcSensorCropRegion</c>, the same model the live colour projection
+        /// uses). With a 1728² sensor and a 1280×960 image that is the full width scaled by 0.74 — not a centre crop
+        /// at sensor scale, which is what the bake assumed while the sensor reported the image's width (the scale is 1
+        /// then and the two agree). A 35 % focal error put every photo at the wrong size on the mesh.
+        /// </summary>
+        static Vector4 ImageIntrinsics(in Keyframe kf)
+            => ImageIntrinsics(new Vector2(kf.Fx, kf.Fy), new Vector2(kf.Cx, kf.Cy),
+                new Vector2(kf.SensorWidth, kf.SensorHeight), new Vector2(kf.Width, kf.Height));
+
+        /// <inheritdoc cref="ImageIntrinsics(in Keyframe)"/>
+        internal static Vector4 ImageIntrinsics(Vector2 focal, Vector2 principal, Vector2 sensor, Vector2 image)
+        {
+            if (sensor.x < 1f || sensor.y < 1f) sensor = image;
+            if (image.x < 1f || image.y < 1f) return new Vector4(focal.x, focal.y, principal.x, principal.y);
+            float m = Mathf.Max(image.x / sensor.x, image.y / sensor.y);   // sensor px → image px
+            Vector2 cropOrigin = (sensor - image / m) * 0.5f;               // in sensor px
+            return new Vector4(focal.x * m, focal.y * m, (principal.x - cropOrigin.x) * m, (principal.y - cropOrigin.y) * m);
+        }
+
+        /// <summary>
         /// Bind one keyframe's camera. <paramref name="scale"/> below 1 binds the
         /// same camera for an image downsampled by that factor (intrinsics and
         /// crop scale together; the pose does not).
         /// </summary>
         static void BindKeyframeCamera(ComputeShader compute, in Keyframe kf, float scale)
         {
-            int sw = kf.SensorWidth > 0 ? kf.SensorWidth : kf.Width;
-            int sh = kf.SensorHeight > 0 ? kf.SensorHeight : kf.Height;
-            float cropX = (sw - kf.Width) * 0.5f;
-            float cropY = (sh - kf.Height) * 0.5f;
+            Vector4 cam = ImageIntrinsics(kf);
             Matrix4x4 viewMat = Matrix4x4.TRS(kf.Position, kf.Rotation, Vector3.one).inverse;
 
             compute.SetMatrix("_ViewMat", viewMat);
             compute.SetVector("_CamPos", new Vector4(kf.Position.x, kf.Position.y, kf.Position.z, 1f));
-            compute.SetFloat("_Fx", kf.Fx * scale);
-            compute.SetFloat("_Fy", kf.Fy * scale);
-            compute.SetFloat("_Cx", kf.Cx * scale);
-            compute.SetFloat("_Cy", kf.Cy * scale);
-            compute.SetFloat("_CropX", cropX * scale);
-            compute.SetFloat("_CropY", cropY * scale);
+            compute.SetFloat("_Fx", cam.x * scale);
+            compute.SetFloat("_Fy", cam.y * scale);
+            compute.SetFloat("_Cx", cam.z * scale);
+            compute.SetFloat("_Cy", cam.w * scale);
+            compute.SetFloat("_CropX", 0f);   // the principal point is already in image pixels
+            compute.SetFloat("_CropY", 0f);
             compute.SetInt("_ImgW", Mathf.Max(1, Mathf.RoundToInt(kf.Width * scale)));
             compute.SetInt("_ImgH", Mathf.Max(1, Mathf.RoundToInt(kf.Height * scale)));
             compute.SetFloat("_KfWeight", kf.WeightOrOne);
@@ -1793,7 +1823,8 @@ namespace Genesis.RoomScan
             }
 
             Vector2 shiftPx = shiftLow * s.Scale;
-            kf.Rotation = ApplyImageShift(kf.Rotation, shiftPx, new Vector2(kf.Fx, kf.Fy));
+            Vector4 icam = ImageIntrinsics(kf);
+            kf.Rotation = ApplyImageShift(kf.Rotation, shiftPx, new Vector2(icam.x, icam.y));
             s.Refined++;
             s.RefinedWeight += kf.WeightOrOne;
             float mag = shiftPx.magnitude;
@@ -1886,6 +1917,7 @@ namespace Genesis.RoomScan
             if (metaList.Count == 0)
                 throw new InvalidOperationException("No keyframes available for baking");
             ApplySharpnessWeights(metaList);
+            _cameraModelLogged = false;
 
             Logger.Info($"[TextureRefine] Found {metaList.Count} keyframes" +
                 (keyframeRelocation != Matrix4x4.identity ? " (relocated)" : ""));
@@ -2044,7 +2076,7 @@ namespace Genesis.RoomScan
                     continue;
 
                 float dist = Vector3.Distance(camPos, centroid);
-                float score = ViewScore(dot, dist, kf.Fx) * kf.WeightOrOne;
+                float score = ViewScore(dot, dist, ImageIntrinsics(kf).x) * kf.WeightOrOne;
 
                 RasterizeTriangle(atlas, bestScore, atlasW, atlasH,
                     u0, v0, u1, v1, u2, v2,
@@ -2061,13 +2093,8 @@ namespace Genesis.RoomScan
         {
             Vector3 cam = viewMat.MultiplyPoint3x4(worldPos);
             if (cam.z <= 0.001f) return new Vector2(-1, -1);
-            float sensorX = kf.Fx * (cam.x / cam.z) + kf.Cx;
-            float sensorY = kf.Fy * (cam.y / cam.z) + kf.Cy;
-            int sw = kf.SensorWidth > 0 ? kf.SensorWidth : kf.Width;
-            int sh = kf.SensorHeight > 0 ? kf.SensorHeight : kf.Height;
-            float cropX = (sw - kf.Width) * 0.5f;
-            float cropY = (sh - kf.Height) * 0.5f;
-            return new Vector2(sensorX - cropX, sensorY - cropY);
+            Vector4 ic = ImageIntrinsics(kf);
+            return new Vector2(ic.x * (cam.x / cam.z) + ic.z, ic.y * (cam.y / cam.z) + ic.w);
         }
 
         static bool IsInFrustum(Vector2 screen, int w, int h)
@@ -2083,10 +2110,7 @@ namespace Genesis.RoomScan
             for (int i = 0; i < depth.Length; i++) depth[i] = float.MaxValue;
 
             Matrix4x4 viewMat = Matrix4x4.TRS(kf.Position, kf.Rotation, Vector3.one).inverse;
-            int sw = kf.SensorWidth > 0 ? kf.SensorWidth : kf.Width;
-            int sh = kf.SensorHeight > 0 ? kf.SensorHeight : kf.Height;
-            float cropX = (sw - kf.Width) * 0.5f;
-            float cropY = (sh - kf.Height) * 0.5f;
+            Vector4 ic = ImageIntrinsics(kf);
             int triCount = indices.Length / 3;
 
             for (int t = 0; t < triCount; t++)
@@ -2100,12 +2124,12 @@ namespace Genesis.RoomScan
 
                 if (c0.z <= 0 && c1.z <= 0 && c2.z <= 0) continue;
 
-                Vector2 s0 = new Vector2(kf.Fx * c0.x / Mathf.Max(c0.z, 0.001f) + kf.Cx - cropX,
-                                         kf.Fy * c0.y / Mathf.Max(c0.z, 0.001f) + kf.Cy - cropY);
-                Vector2 s1 = new Vector2(kf.Fx * c1.x / Mathf.Max(c1.z, 0.001f) + kf.Cx - cropX,
-                                         kf.Fy * c1.y / Mathf.Max(c1.z, 0.001f) + kf.Cy - cropY);
-                Vector2 s2 = new Vector2(kf.Fx * c2.x / Mathf.Max(c2.z, 0.001f) + kf.Cx - cropX,
-                                         kf.Fy * c2.y / Mathf.Max(c2.z, 0.001f) + kf.Cy - cropY);
+                Vector2 s0 = new Vector2(ic.x * c0.x / Mathf.Max(c0.z, 0.001f) + ic.z,
+                                         ic.y * c0.y / Mathf.Max(c0.z, 0.001f) + ic.w);
+                Vector2 s1 = new Vector2(ic.x * c1.x / Mathf.Max(c1.z, 0.001f) + ic.z,
+                                         ic.y * c1.y / Mathf.Max(c1.z, 0.001f) + ic.w);
+                Vector2 s2 = new Vector2(ic.x * c2.x / Mathf.Max(c2.z, 0.001f) + ic.z,
+                                         ic.y * c2.y / Mathf.Max(c2.z, 0.001f) + ic.w);
 
                 RasterizeDepthTriangle(depth, w, h, s0, s1, s2, c0.z, c1.z, c2.z);
             }

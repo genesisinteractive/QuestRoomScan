@@ -113,7 +113,7 @@ namespace Genesis.RoomScan.Editor
         class Frame
         {
             public int id;
-            public float ts, px, py, pz, qx, qy, qz, qw, fx, fy, sw, sh, w, h;
+            public float ts, px, py, pz, qx, qy, qz, qw, fx, fy, cx, cy, sw, sh, w, h;
             public string cap;
         }
 
@@ -172,6 +172,267 @@ namespace Genesis.RoomScan.Editor
             return s;
         }
 
+        public const string AtlasPref = "QRS.TextureBakeProbe.Atlas";
+        public const string ViewsPref = "QRS.TextureBakeProbe.Views";
+
+        [MenuItem("Tools/Room Scan/Render Baked Atlas From Keyframes")]
+        static void MenuViews() => Debug.Log("[TextureBakeProbe] " + RenderViews());
+
+        /// <summary>
+        /// Render the package's refined mesh with a baked atlas (<see cref="AtlasPref"/>, default
+        /// <see cref="OutDir"/>/all.png) through the cameras of chosen keyframes (<see cref="ViewsPref"/>: ids such as
+        /// "3,40,113"; default every 16th), with the bake's own projection, and write photo | render | half-and-half
+        /// to <see cref="OutDir"/>/views/&lt;atlas&gt;/kf_&lt;id&gt;.png. An atlas that agrees with the photos lines
+        /// up with each of them; a patch textured from a photo whose pose was off shows as a ghost in the blend.
+        /// views.txt has, per view, the luma correlation of render and photo at no shift and at the best whole-image
+        /// shift (±48 px): a large best shift is the photo's own pose error against the rest. Edit mode is fine.
+        /// </summary>
+        public static string RenderViews()
+        {
+            string pkg = EditorPrefs.GetString(PackagePref, "");
+            if (!Directory.Exists(pkg)) return "no package at " + pkg;
+            string atlasPath = EditorPrefs.GetString(AtlasPref, "");
+            if (string.IsNullOrEmpty(atlasPath)) atlasPath = Path.Combine(OutDir, "all.png");
+            // "normals": the bare geometry, coloured by surface direction, to check mesh and pose against the photo.
+            bool normals = atlasPath == "normals";
+            if (!normals && !File.Exists(atlasPath)) return "no atlas at " + atlasPath;
+            string kfDir = Path.Combine(pkg, "keyframes");
+            var frames = new List<Frame>();
+            foreach (var line in File.ReadLines(Path.Combine(kfDir, "frames.jsonl")))
+                if (line.Trim().Length > 0) frames.Add(JsonUtility.FromJson<Frame>(line));
+            var wanted = new HashSet<int>();
+            string views = EditorPrefs.GetString(ViewsPref, "");
+            // "all": every keyframe, numbers only (no sheets), for a per-photo offset table.
+            bool all = views.Trim() == "all";
+            foreach (var t in views.Split(','))
+                if (int.TryParse(t.Trim(), out int id)) wanted.Add(id);
+            if (all) foreach (var f in frames) wanted.Add(f.id);
+            if (wanted.Count == 0)
+                for (int i = 0; i < frames.Count; i += 16) wanted.Add(frames[i].id);
+
+            string outDir = Path.Combine(OutDir, "views", Path.GetFileNameWithoutExtension(atlasPath));
+            Directory.CreateDirectory(outDir);
+            var m = ReadRefinedMesh(Path.Combine(pkg, "refined_mesh.bin"));
+            var mesh = new UnityEngine.Mesh { indexFormat = UnityEngine.Rendering.IndexFormat.UInt32 };
+            mesh.vertices = m.Positions;
+            mesh.uv = m.UVs;
+            mesh.triangles = m.Indices;
+            var atlas = new Texture2D(2, 2, TextureFormat.RGBA32, false) { wrapMode = TextureWrapMode.Clamp };
+            if (normals)
+            {
+                atlas.SetPixel(0, 0, Color.white); atlas.SetPixel(1, 0, Color.white);
+                atlas.SetPixel(0, 1, Color.white); atlas.SetPixel(1, 1, Color.white);
+                atlas.Apply();
+                var cols = new Color[m.Normals.Length];
+                for (int i = 0; i < cols.Length; i++)
+                {
+                    var n = m.Normals[i].normalized;
+                    cols[i] = new Color(n.x * 0.5f + 0.5f, n.y * 0.5f + 0.5f, n.z * 0.5f + 0.5f, 1f);
+                }
+                mesh.colors = cols;
+            }
+            else atlas.LoadImage(File.ReadAllBytes(atlasPath));
+            var shader = normals
+                ? Shader.Find("Universal Render Pipeline/Particles/Unlit")
+                : Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Unlit/Texture");
+            var mat = new Material(shader) { mainTexture = atlas };
+            if (mat.HasProperty("_BaseMap")) mat.SetTexture("_BaseMap", atlas);
+            if (mat.HasProperty("_Cull")) mat.SetFloat("_Cull", 0f);
+            const int layer = 31;
+            var go = new GameObject("[AtlasView]") { hideFlags = HideFlags.HideAndDontSave, layer = layer };
+            go.AddComponent<MeshFilter>().sharedMesh = mesh;
+            go.AddComponent<MeshRenderer>().sharedMaterial = mat;
+            var camGo = new GameObject("[AtlasViewCam]") { hideFlags = HideFlags.HideAndDontSave };
+            var cam = camGo.AddComponent<Camera>();
+            cam.enabled = false;
+            cam.cullingMask = 1 << layer;
+            cam.clearFlags = CameraClearFlags.SolidColor;
+            cam.backgroundColor = Color.black;
+            cam.allowMSAA = false;
+            cam.allowHDR = false;
+            const float near = 0.02f, far = 30f;
+            cam.nearClipPlane = near;
+            cam.farClipPlane = far;
+            bool asyncWas = ShaderUtil.allowAsyncCompilation;
+            ShaderUtil.allowAsyncCompilation = false;
+            // A variant still compiling draws magenta and Camera.Render does not wait for it.
+            for (int i = 0; i < mat.passCount; i++) ShaderUtil.CompilePass(mat, i, true);
+            var report = new StringBuilder($"# Atlas views {DateTime.Now:yyyy-MM-dd HH:mm}: {atlasPath}\n" +
+                                           "id   ncc0   nccBest  shift(px)  covered\n");
+            var csv = new StringBuilder("id,ts,ncc0,nccBest,shiftX,shiftY,covered\n");
+            int done = 0;
+            try
+            {
+                foreach (var f in frames)
+                {
+                    if (!wanted.Contains(f.id)) continue;
+                    string img = Path.Combine(kfDir, "images", $"{f.id:D6}.jpg");
+                    if (!File.Exists(img)) continue;
+                    int w = Mathf.RoundToInt(f.w), h = Mathf.RoundToInt(f.h);
+                    // The bake's projection (TextureRefinement.ImageIntrinsics).
+                    Vector4 ic = TextureRefinement.ImageIntrinsics(new Vector2(f.fx, f.fy), new Vector2(f.cx, f.cy),
+                        new Vector2(f.sw, f.sh), new Vector2(f.w, f.h));
+                    var proj = Matrix4x4.zero;
+                    proj[0, 0] = 2f * ic.x / w;
+                    proj[0, 2] = 1f - 2f * ic.z / w;
+                    proj[1, 1] = 2f * ic.y / h;
+                    proj[1, 2] = 1f - 2f * ic.w / h;
+                    proj[2, 2] = -(far + near) / (far - near);
+                    proj[2, 3] = -2f * far * near / (far - near);
+                    proj[3, 2] = -1f;
+                    cam.transform.SetPositionAndRotation(new Vector3(f.px, f.py, f.pz), new Quaternion(f.qx, f.qy, f.qz, f.qw));
+                    cam.projectionMatrix = proj;
+                    var rt = RenderTexture.GetTemporary(w, h, 24, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB);
+                    cam.targetTexture = rt;
+                    cam.Render();
+                    cam.Render();   // the first submit after a material is made can still be magenta
+                    cam.targetTexture = null;
+                    var render = ReadBack(rt, w, h);
+                    var photoTex = new Texture2D(2, 2);
+                    photoTex.LoadImage(File.ReadAllBytes(img));
+                    Graphics.Blit(photoTex, rt);
+                    var photo = ReadBack(rt, w, h);
+                    UnityEngine.Object.DestroyImmediate(photoTex);
+                    RenderTexture.ReleaseTemporary(rt);
+
+                    Compare(photo, render, w, h, out float ncc0, out float nccBest, out Vector2Int shift, out float covered);
+                    report.AppendLine($"{f.id,3}  {ncc0,5:F2}  {nccBest,6:F2}  ({shift.x,4}, {shift.y,4})  {covered:P0}");
+                    csv.AppendLine(string.Format(CultureInfo.InvariantCulture, "{0},{1:F3},{2:F3},{3:F3},{4},{5},{6:F3}",
+                        f.id, f.ts, ncc0, nccBest, shift.x, shift.y, covered));
+                    if (all)
+                    {
+                        // The render alone at half size, for offline comparison with the photo.
+                        var half = RenderTexture.GetTemporary(w / 2, h / 2, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB);
+                        Graphics.Blit(render, half);
+                        var small = ReadBack(half, w / 2, h / 2);
+                        RenderTexture.ReleaseTemporary(half);
+                        File.WriteAllBytes(Path.Combine(outDir, $"r_{f.id:D3}.png"), small.EncodeToPNG());
+                        UnityEngine.Object.DestroyImmediate(small);
+                        UnityEngine.Object.DestroyImmediate(photo);
+                        UnityEngine.Object.DestroyImmediate(render);
+                        done++;
+                        continue;
+                    }
+                    var sheet = new Texture2D(w * 3, h, TextureFormat.RGBA32, false);
+                    var dst = sheet.GetPixelData<Color32>(0);
+                    var a = photo.GetPixelData<Color32>(0);
+                    var b = render.GetPixelData<Color32>(0);
+                    for (int y = 0; y < h; y++)
+                    for (int x = 0; x < w; x++)
+                    {
+                        int i = y * w + x, o = y * w * 3 + x;
+                        Color32 pa = a[i], pb = b[i];
+                        dst[o] = pa;
+                        dst[o + w] = pb;
+                        dst[o + 2 * w] = new Color32((byte)((pa.r + pb.r) / 2), (byte)((pa.g + pb.g) / 2), (byte)((pa.b + pb.b) / 2), 255);
+                    }
+                    sheet.Apply(false);
+                    File.WriteAllBytes(Path.Combine(outDir, $"kf_{f.id:D3}.png"), sheet.EncodeToPNG());
+                    UnityEngine.Object.DestroyImmediate(sheet);
+                    UnityEngine.Object.DestroyImmediate(photo);
+                    UnityEngine.Object.DestroyImmediate(render);
+                    done++;
+                }
+            }
+            finally
+            {
+                ShaderUtil.allowAsyncCompilation = asyncWas;
+                UnityEngine.Object.DestroyImmediate(camGo);
+                UnityEngine.Object.DestroyImmediate(go);
+                UnityEngine.Object.DestroyImmediate(mat);
+                UnityEngine.Object.DestroyImmediate(atlas);
+                UnityEngine.Object.DestroyImmediate(mesh);
+            }
+            File.WriteAllText(Path.Combine(outDir, "views.txt"), report.ToString());
+            File.WriteAllText(Path.Combine(outDir, "views.csv"), csv.ToString());
+            return $"{done} views → {outDir}";
+        }
+
+        static Texture2D ReadBack(RenderTexture rt, int w, int h)
+        {
+            var prev = RenderTexture.active;
+            RenderTexture.active = rt;
+            var t = new Texture2D(w, h, TextureFormat.RGBA32, false);
+            t.ReadPixels(new Rect(0, 0, w, h), 0, 0);
+            t.Apply(false);
+            RenderTexture.active = prev;
+            return t;
+        }
+
+        /// <summary>Luma correlation of photo and render over the rendered pixels, at no shift and at the best
+        /// whole-image shift of the photo against the render within ±96 px (searched at 1/8 resolution, refined at
+        /// 1/4; reported in full pixels, + = the photo's content sits right / up of the render's).</summary>
+        static void Compare(Texture2D photo, Texture2D render, int w, int h, out float ncc0, out float best,
+            out Vector2Int shift, out float covered)
+        {
+            var a = photo.GetPixelData<Color32>(0);
+            var b = render.GetPixelData<Color32>(0);
+            void Level(int s, out float[] pl, out float[] rl, out bool[] rm, out int lw, out int lh)
+            {
+                lw = w / s; lh = h / s;
+                pl = new float[lw * lh]; rl = new float[lw * lh]; rm = new bool[lw * lh];
+                for (int y = 0; y < lh; y++)
+                for (int x = 0; x < lw; x++)
+                {
+                    float sa = 0, sb = 0;
+                    int cov = 0;
+                    for (int dy = 0; dy < s; dy++)
+                    for (int dx = 0; dx < s; dx++)
+                    {
+                        int i = (y * s + dy) * w + x * s + dx;
+                        Color32 ca = a[i], cb = b[i];
+                        sa += 0.3f * ca.r + 0.59f * ca.g + 0.11f * ca.b;
+                        sb += 0.3f * cb.r + 0.59f * cb.g + 0.11f * cb.b;
+                        if (cb.r + cb.g + cb.b > 6) cov++;
+                    }
+                    pl[y * lw + x] = sa / (s * s);
+                    rl[y * lw + x] = sb / (s * s);
+                    rm[y * lw + x] = cov == s * s;
+                }
+            }
+            float Ncc(float[] pl, float[] rl, bool[] rm, int lw, int lh, int margin, int sx, int sy)
+            {
+                double sp = 0, sr = 0, spp = 0, srr = 0, spr = 0;
+                int n = 0;
+                for (int y = margin; y < lh - margin; y++)
+                for (int x = margin; x < lw - margin; x++)
+                {
+                    int i = y * lw + x;
+                    if (!rm[i]) continue;
+                    float r = rl[i], p = pl[(y + sy) * lw + x + sx];
+                    sp += p; sr += r; spp += p * p; srr += r * r; spr += p * r;
+                    n++;
+                }
+                if (n < 100) return -1f;
+                double vp = spp - sp * sp / n, vr = srr - sr * sr / n;
+                return vp <= 1e-6 || vr <= 1e-6 ? -1f : (float)((spr - sp * sr / n) / Math.Sqrt(vp * vr));
+            }
+            Level(8, out var p8, out var r8, out var m8, out int w8, out int h8);
+            Level(4, out var p4, out var r4, out var m4, out int w4, out int h4);
+            int c = 0;
+            foreach (bool v in m4) if (v) c++;
+            covered = (float)c / m4.Length;
+            const int r8max = 12;   // ±96 px
+            int bx = 0, by = 0;
+            float b8 = -2f;
+            for (int sy = -r8max; sy <= r8max; sy++)
+            for (int sx = -r8max; sx <= r8max; sx++)
+            {
+                float v = Ncc(p8, r8, m8, w8, h8, r8max, sx, sy);
+                if (v > b8) { b8 = v; bx = sx; by = sy; }
+            }
+            const int margin4 = 2 * r8max + 2;
+            ncc0 = Ncc(p4, r4, m4, w4, h4, margin4, 0, 0);
+            best = -2f;
+            shift = Vector2Int.zero;
+            for (int sy = 2 * by - 2; sy <= 2 * by + 2; sy++)
+            for (int sx = 2 * bx - 2; sx <= 2 * bx + 2; sx++)
+            {
+                float v = Ncc(p4, r4, m4, w4, h4, margin4, sx, sy);
+                if (v > best) { best = v; shift = new Vector2Int(sx * 4, sy * 4); }
+            }
+        }
+
         /// <summary>The collector's estimate (<c>KeyframeCollector.HandCoverage</c>) on a recorded frame, with the
         /// focal length scaled to the saved image.</summary>
         public static float HandCoverageOf(string framesJsonlLine) => HandCoverage(JsonUtility.FromJson<Frame>(framesJsonlLine));
@@ -181,8 +442,10 @@ namespace Genesis.RoomScan.Editor
             if (string.IsNullOrEmpty(f.cap) || f.w <= 1f || f.h <= 1f) return 0f;
             var camPos = new Vector3(f.px, f.py, f.pz);
             var inv = Quaternion.Inverse(new Quaternion(f.qx, f.qy, f.qz, f.qw));
-            float scale = f.sw > 1f ? f.w / f.sw : 1f;
-            var focal = new Vector2(f.fx, f.fy) * scale;
+            Vector4 ic = TextureRefinement.ImageIntrinsics(new Vector2(f.fx, f.fy), new Vector2(f.cx, f.cy),
+                new Vector2(f.sw, f.sh), new Vector2(f.w, f.h));
+            var focal = new Vector2(ic.x, ic.y);
+            var principal = new Vector2(ic.z, ic.w);
             var res = new Vector2(f.w, f.h);
             float total = 0f;
             foreach (var c in f.cap.Split(';'))
@@ -197,8 +460,8 @@ namespace Genesis.RoomScan.Editor
                 if (a.z < near && b.z < near) continue;
                 if (a.z < near) a = Vector3.Lerp(a, b, (near - a.z) / (b.z - a.z));
                 else if (b.z < near) b = Vector3.Lerp(b, a, (near - b.z) / (a.z - b.z));
-                Vector2 pa = new Vector2(focal.x * a.x / a.z, focal.y * a.y / a.z) + res * 0.5f;
-                Vector2 pb = new Vector2(focal.x * b.x / b.z, focal.y * b.y / b.z) + res * 0.5f;
+                Vector2 pa = new Vector2(focal.x * a.x / a.z, focal.y * a.y / a.z) + principal;
+                Vector2 pb = new Vector2(focal.x * b.x / b.z, focal.y * b.y / b.z) + principal;
                 float pr = focal.x * rad / Mathf.Min(a.z, b.z);
                 Vector2 min = Vector2.Max(Vector2.Min(pa, pb) - Vector2.one * pr, Vector2.zero);
                 Vector2 maxv = Vector2.Min(Vector2.Max(pa, pb) + Vector2.one * pr, res);

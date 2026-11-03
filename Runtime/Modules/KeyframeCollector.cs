@@ -161,7 +161,8 @@ namespace Genesis.RoomScan
             string caps = null;
             if (capCount > 0)
             {
-                float coverage = HandCoverage(capCount, pos, rot, focalLen, currentRes);
+                Vector4 ic = TextureRefinement.ImageIntrinsics(focalLen, principalPt, sensorRes, currentRes);
+                float coverage = HandCoverage(capCount, pos, rot, new Vector2(ic.x, ic.y), new Vector2(ic.z, ic.w), currentRes);
                 if (coverage > maxHandCoverage)
                 {
                     if (++_skippedForHands <= 3 || _skippedForHands % 25 == 0)
@@ -211,7 +212,7 @@ namespace Genesis.RoomScan
         /// between its end points swept by the projected radius, clipped to
         /// the image. Capsules behind the camera contribute nothing.
         /// </summary>
-        float HandCoverage(int count, Vector3 camPos, Quaternion camRot, Vector2 focal, Vector2 res)
+        float HandCoverage(int count, Vector3 camPos, Quaternion camRot, Vector2 focal, Vector2 principal, Vector2 res)
         {
             if (res.x <= 1f || res.y <= 1f || focal.x <= 1f) return 0f;
             Quaternion inv = Quaternion.Inverse(camRot);
@@ -232,8 +233,8 @@ namespace Genesis.RoomScan
                 if (a.z < near) a = Vector3.Lerp(a, b, (near - a.z) / (b.z - a.z));
                 else if (b.z < near) b = Vector3.Lerp(b, a, (near - b.z) / (a.z - b.z));
                 float za = a.z, zb = b.z;
-                Vector2 pa = new Vector2(focal.x * a.x / za, focal.y * a.y / za) + res * 0.5f;
-                Vector2 pb = new Vector2(focal.x * b.x / zb, focal.y * b.y / zb) + res * 0.5f;
+                Vector2 pa = new Vector2(focal.x * a.x / za, focal.y * a.y / za) + principal;
+                Vector2 pb = new Vector2(focal.x * b.x / zb, focal.y * b.y / zb) + principal;
                 float pr = focal.x * r / Mathf.Min(za, zb);
                 // Footprint of the capsule's projection, clipped to the image rect.
                 Vector2 min = Vector2.Min(pa, pb) - Vector2.one * pr;
