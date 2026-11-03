@@ -6,67 +6,52 @@ All notable changes to this package are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-11-04
+
+Scan textures line up again on current headsets, a fully scanned room reaches
+complete, and quick scans bake sharper.
+
 ### Fixed
 
-- Texture refinement projected every keyframe photo at the wrong size when the
-  camera reports a sensor larger than the photo. Passthrough Camera Access
+- Texture refinement placed every keyframe photo at the wrong size when the
+  camera reports a sensor larger than the photo, as current headsets do (a
+  1728×1728 sensor for 1280×960 photos, seen with Meta XR SDK 207). Passthrough Camera Access
   delivers the largest centred sensor region with the photo's aspect, scaled to
-  the photo size; the bake treated the photo as a centre crop at sensor scale.
-  With a 1728² sensor and 1280×960 photos (what the current SDK reports) that is
-  a 35 % focal error: textures landed doubled and torn, and registration
-  rejected most keyframes (54 of 255 aligned on one scan; 244 after the fix).
-  `TextureRefinement.ImageIntrinsics` now applies the same crop-and-scale as the
-  live colour projection, in the GPU and CPU bakes, the occlusion raster and
-  registration's pixel-to-angle step. When the sensor reports the photo's width
-  the two models agree, so earlier scans bake as before. The bake logs the
-  camera model once (`[TextureRefine] Camera: sensor … → image …`).
+  the photo; the bake treated the photo as a centre crop at sensor scale, a
+  35 % focal error. Textures came out doubled and torn, and registration
+  rejected most keyframes (78 of 255 aligned on one headset scan; 244 after the
+  fix, the share scans had before the SDK change). `TextureRefinement.ImageIntrinsics`
+  applies the same crop-and-scale as the live colour projection in the GPU and
+  CPU bakes, the occlusion raster and registration. Where the sensor reports
+  the photo's width the two models agree, so those scans bake as before. The
+  bake logs the camera model once (`[TextureRefine] Camera: sensor … → image …`).
 - Scan progress could stop short of complete in a fully scanned room. The
   analysis skipped free voxels in blocks holding nothing else, so a surface lying
   exactly on an 8-voxel block edge (the floor at height 0, any wall that lands
-  on one) stopped counting once the air in front of it was observed: a closed
-  room read a fraction of its surface and its closure stayed low. Free blocks
+  on one) stopped counting once the air in front of it was observed. Free blocks
   next to a solid or unknown block are visited now. Closure also uses the larger
   of the face count and a voxel estimate of the surface band
   (`VolumeIntegrator.FaceSurfaceAreaM2`, `BandSurfaceAreaM2`).
 - Small holes were capped on one face direction only: a leak face's direction was
   stored as a denormal float, which the GPU may flush to zero, so every face read
   as +x and the fill wrote nothing where the hole faced another way.
+- Photos taken during a fast head turn no longer win a surface. Each keyframe's
+  view score is weighed by how still the head was (`weighBySharpness`, half
+  weight at `sharpHalfDegPerSec` 25, floor `sharpMinWeight` 0.05): a steady view
+  wins and a smeared one only fills what no steady view saw. Older packages use
+  the turn to the neighbouring keyframes.
+- `KeyframeCollector` measures head speed from one camera frame to the next on
+  every frame, timed by the camera's own clock when the provider implements
+  `ICameraFrameTiming`, with an angle that stays exact for small turns. It used
+  to average it over the capture interval, and read slow turns as none.
 - `RoomScanSession.FinalizeScanAsync` fails at once when on-device texture
   refinement throws (for example a missing xatlas plugin), instead of waiting
-  out its 5-minute timeout. New `RoomScanner.RefinementFailed` event carries
-  the error message.
+  out its 5-minute timeout.
 - The setup wizard's macOS editor build of xatlas links against the newest
   installed macOS SDK no newer than the running OS (a newer default SDK can be
   unreadable to the installed linker) and builds both arm64 and x86_64.
-- Texture refinement no longer lets photos taken during a fast head turn win a
-  surface. A quick scan in a dim room (10 ms exposure) saved most keyframes
-  while turning at 40-80 deg/s; they won texels as often as steady ones, so the
-  atlas came out smeared (the doubling on that scan was the camera model above). Each keyframe's view score is now weighed
-  by how still the head was (`weighBySharpness`, half weight at
-  `sharpHalfDegPerSec` 25, floor `sharpMinWeight` 0.05): a steady view wins and
-  a smeared one only fills what no steady view saw. Older packages use the turn
-  to the neighbouring keyframes. The blend pass keeps more precision in its
-  weights so the lower scores still blend smoothly.
-- `KeyframeCollector` measures head speed from one camera frame to the next on
-  every frame, timed by the camera's own clock when the provider implements
-  `ICameraFrameTiming`. It used to average it over the capture interval.
 
 ### Added
-
-- `PassthroughCameraProvider` logs the camera's supported resolutions once per
-  run, beside the one requested.
-- Keyframes record the head turn speed at capture (`"av"`, deg/s, in
-  `frames.jsonl`). A pose already covered only by fast-turn keyframes is
-  captured again when the head holds still on it (`sharpRetakeDegPerSec`, 15;
-  at most one retake per pose). `KeyframeCollector.SharpRetakes` counts them.
-- Editor checks: Tools → Room Scan → Re-bake Package Atlas re-bakes a pulled
-  scan package in Play from its own keyframes (all, or filtered by hand
-  footprint or head speed). Render Baked Atlas From Keyframes renders the
-  package's mesh with a baked atlas (or its bare geometry) through chosen
-  keyframes' cameras beside their photos, with a render-to-photo correlation
-  per view. Check Keyframe Steady Retakes drives the collector with a fast
-  sweep and a slow one. Re-bake Package Atlas (atlas x1.85) bakes a package's
-  own UV layout into a denser atlas, to judge what a larger atlas would show.
 
 - Stalled holes are capped: when the leak has not shrunk for `stallSeconds`
   (20) near the end of a scan (total leak at most `stallMaxLeakM2`, 2 m²), holes
@@ -74,19 +59,38 @@ All notable changes to this package are documented here. The format follows
   window, a mirror or a black screen that depth cannot close no longer keeps a
   scan from finishing. `ScanCoverage.LeakStalled` / `VolumeIntegrator.LeakStalled`
   report it.
-- Editor check of the scan analysis on synthetic rooms (Tools → Room Scan →
-  Check Scan Analysis): surfaces on and off block edges, frozen, thin, holed,
-  turned, and a stalled window, each compared with a CPU count.
 - Freeze preview: `RoomScanSession.SetFreezePreview(slot, origin, direction,
   halfAngleDegrees, maxMetres, color)` and `ClearFreezePreview(slot)` light the
   live mesh's surfaces that a `FreezeInView` / `UnfreezeInView` with the same
   cone would paint, before it is painted (two slots, e.g. one per hand; shader
   globals only, no volume work).
 - `RoomScanSession.CopyHeadsetRoomLabels(List<string>)` and
-  `RoomScanSession.HeadsetRoomHasLabel(string)`: the Scene API labels
-  of the captured room the headset is in (`BED`, `TABLE`, `COUCH`, …),
-  for apps that adapt to the furniture of the room they run in. Backed by
+  `RoomScanSession.HeadsetRoomHasLabel(string)`: the Scene API labels of the
+  captured room the headset is in (`BED`, `TABLE`, `COUCH`, …), for apps that
+  adapt to the furniture of the room they run in. Backed by
   `RoomUnderstanding.CopyLabelsOfRoomContaining`.
+- `RoomScanner.RefinementFailed` event, with the error message.
+- Keyframes record the head turn speed at capture (`"av"`, deg/s, in
+  `frames.jsonl`). A pose already covered only by fast-turn keyframes is
+  captured again when the head holds still on it (`sharpRetakeDegPerSec`, 15;
+  at most one retake per pose). `KeyframeCollector.SharpRetakes` counts them.
+- `PassthroughCameraProvider` logs the camera's supported resolutions once per
+  run, beside the one requested.
+- Editor tools under Tools → Room Scan: **Check Scan Analysis** (synthetic rooms:
+  surfaces on and off block edges, frozen, thin, holed, turned, and a stalled
+  window, each against a CPU count); **Choose Scan Package…**, **Re-bake Package
+  Atlas** (a pulled package re-baked in Play from its own keyframes) and
+  **Render Baked Atlas From Keyframes** (the package's mesh with a baked atlas,
+  or its bare geometry, rendered through keyframe cameras beside their photos,
+  with a render-to-photo correlation per view); **Check Keyframe Steady
+  Retakes** (Play: the collector driven by a fast sweep and a slow one).
+
+### Notes
+
+- `frames.jsonl` keeps the sensor's intrinsics (`fx`, `fy`, `cx`, `cy`, `sw`,
+  `sh`) beside the image size (`w`, `h`). Any other reader must apply the same
+  crop-and-scale (`TextureRefinement.ImageIntrinsics`) when `sw` differs from
+  `w`.
 
 ## [1.3.3] - 2026-10-29
 

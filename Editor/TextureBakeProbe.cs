@@ -9,38 +9,37 @@ using UnityEngine;
 namespace Genesis.RoomScan.Editor
 {
     /// <summary>
-    /// Re-bake a saved scan package's texture atlas in the editor from its own keyframes and refined mesh, the way
-    /// the headset bakes it (the same <see cref="TextureRefinement"/> component and settings as the open scene), to
-    /// compare bakes on one real scan: all keyframes, or leaving out frames whose hand footprint (the recorded hand /
-    /// forearm capsules projected into the frame) is over a fraction of the image.
-    /// <para>Set the package folder (a pulled <c>pkg_*</c> with <c>refined_mesh.bin</c> and <c>keyframes/</c>) in
-    /// <see cref="PackagePref"/>, enter Play (the bake awaits frames and GPU readbacks), then
-    /// Tools → Room Scan → Re-bake Package Atlas (…). Results: <see cref="OutDir"/>/&lt;name&gt;.png and status.txt.
-    /// </para>
+    /// Editor tools for a saved scan package's texture (a <c>pkg_*</c> folder pulled from the device, with
+    /// <c>refined_mesh.bin</c> and <c>keyframes/</c>). Choose it with Tools → Room Scan → Choose Scan Package….
+    /// <list type="bullet">
+    /// <item><b>Re-bake Package Atlas</b> (Play: the bake awaits frames and GPU readbacks): the package's atlas baked
+    /// again from its own keyframes with the open scene's <see cref="TextureRefinement"/> settings, into
+    /// <see cref="OutDir"/>/&lt;name&gt;.png (status in status.txt). <see cref="Start"/> also filters keyframes by
+    /// hand footprint or head speed and can bake into a denser atlas.</item>
+    /// <item><b>Render Baked Atlas From Keyframes</b> (edit mode): <see cref="RenderViews"/>.</item>
+    /// </list>
     /// </summary>
     public static class TextureBakeProbe
     {
         public const string PackagePref = "QRS.TextureBakeProbe.Package";
         public const string OutDir = "Temp/TextureBake";
 
-        [MenuItem("Tools/Room Scan/Re-bake Package Atlas (all keyframes)")]
+        [MenuItem("Tools/Room Scan/Choose Scan Package…")]
+        static void MenuChoose()
+        {
+            string dir = EditorUtility.OpenFolderPanel("Scan package (pkg_*)", EditorPrefs.GetString(PackagePref, ""), "");
+            if (string.IsNullOrEmpty(dir)) return;
+            if (!File.Exists(Path.Combine(dir, "refined_mesh.bin")) || !Directory.Exists(Path.Combine(dir, "keyframes")))
+            {
+                EditorUtility.DisplayDialog("Scan package", "That folder has no refined_mesh.bin and keyframes/.", "OK");
+                return;
+            }
+            EditorPrefs.SetString(PackagePref, dir);
+            Debug.Log("[TextureBakeProbe] package: " + dir);
+        }
+
+        [MenuItem("Tools/Room Scan/Re-bake Package Atlas")]
         static void MenuAll() => Start(1.01f, "all");
-
-        [MenuItem("Tools/Room Scan/Re-bake Package Atlas (hands at most 12 %)")]
-        static void MenuTwelve() => Start(0.12f, "hands12");
-
-        [MenuItem("Tools/Room Scan/Re-bake Package Atlas (no hands in view)")]
-        static void MenuNone() => Start(0.0001f, "nohands");
-
-        [MenuItem("Tools/Room Scan/Re-bake Package Atlas (head under 25 deg per s)")]
-        static void MenuSlow() => Start(1.01f, "slow25", 25f);
-
-        [MenuItem("Tools/Room Scan/Re-bake Package Atlas (head under 25 deg per s, hands at most 12 %)")]
-        static void MenuSlowHands() => Start(0.12f, "slow25_hands12", 25f);
-
-        // x1.85: the most a 1D texel dispatch takes (65535 groups x 256 = 16.7 M texels) on a 2180x2232 package.
-        [MenuItem("Tools/Room Scan/Re-bake Package Atlas (all keyframes, atlas x1.85)")]
-        static void MenuAllDenser() => Start(1.01f, "all_x185", 0f, 1.85f);
 
         /// <summary>Bake the package in <see cref="PackagePref"/>, dropping frames whose hand footprint exceeds
         /// <paramref name="maxHandCoverage"/> (≥ 1 keeps all), into <see cref="OutDir"/>/<paramref name="name"/>.png.
