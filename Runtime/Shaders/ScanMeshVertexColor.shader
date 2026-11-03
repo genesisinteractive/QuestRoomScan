@@ -65,6 +65,10 @@ Shader "Genesis/ScanMeshVertexColor"
             float _RSWireThickness;
             // 1 = tint the surface where the analysis found a leak face.
             float _RSShowHoles;
+            // Freeze preview cones (RoomScanner.SetFreezePreview): A = apex xyz, cos(half-angle);
+            // B = axis xyz, max metres (0 unbounded); C = colour rgb, strength (0 = off).
+            float4 _RSPreviewCone0A, _RSPreviewCone0B, _RSPreviewCone0C;
+            float4 _RSPreviewCone1A, _RSPreviewCone1B, _RSPreviewCone1C;
 
             #define DEPTH_TOLERANCE 0.015
 
@@ -127,6 +131,25 @@ Shader "Genesis/ScanMeshVertexColor"
                 if (_RSNoFreezeTint < 0.5 && IsVoxelFrozen(worldPos))
                     color = lerp(color, half3(0.3, 0.5, 0.9), 0.25);
                 return color;
+            }
+
+            // A freeze preview cone lights the surfaces a FreezeInView / UnfreezeInView with the same cone would
+            // paint (the same test as gsInFreezeCone: past 5 cm of the apex, within the angle and the length): a
+            // drifting fill and a brighter rim, so the edge of what will change is plain.
+            half3 ApplyPreviewCone(half3 color, float3 p, float4 a, float4 b, float4 c)
+            {
+                if (c.a <= 0.001) return color;
+                float3 d = p - a.xyz;
+                float dist = length(d);
+                if (dist < 0.05) return color;
+                float along = dot(d, b.xyz);
+                float cosAng = along / dist;
+                if (cosAng < a.w) return color;
+                if (b.w > 0.0 && along > b.w) return color;
+                float t = saturate((cosAng - a.w) / max(1.0 - a.w, 1e-4));
+                float rim = 1.0 - smoothstep(0.0, 0.14, t);
+                float fill = 0.30 + 0.08 * sin(_Time.y * 4.0 - dist * 16.0);
+                return lerp(color, c.rgb, saturate((fill + rim * 0.55) * c.a));
             }
 
             // The leak-marked voxel is the free one just in front of the
@@ -201,8 +224,10 @@ Shader "Genesis/ScanMeshVertexColor"
                     baseColor = IN.color.rgb;
                 }
 
-                // 2. Apply freeze tint
+                // 2. Apply freeze tint, then the preview cones (slot 0 drawn last: on top)
                 baseColor = ApplyFreezeTint(baseColor, IN.positionWS);
+                baseColor = ApplyPreviewCone(baseColor, IN.positionWS, _RSPreviewCone1A, _RSPreviewCone1B, _RSPreviewCone1C);
+                baseColor = ApplyPreviewCone(baseColor, IN.positionWS, _RSPreviewCone0A, _RSPreviewCone0B, _RSPreviewCone0C);
                 baseColor = ApplyBirthFade(baseColor, IN.color.a);
 
                 // 2b. Leak tint: the free voxel in front of this surface point

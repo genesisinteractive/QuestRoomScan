@@ -1749,7 +1749,9 @@ namespace Genesis.RoomScan.Editor
                 string outDir = Path.Combine(pkgRoot, "Plugins/macOS");
                 Directory.CreateDirectory(outDir);
                 string outPath = Path.Combine(outDir, "libxatlas.bundle");
-                string bArgs = $"-shared -O2 -fPIC -std=c++11 -fvisibility=hidden{meshoptInc} " +
+                // Both editor architectures, against an SDK no newer than this macOS: the default SDK can be a newer
+                // one the installed linker cannot read ("tapi error: unknown architecture" on its .tbd stubs).
+                string bArgs = $"{MacSdkArgs()}-arch arm64 -arch x86_64 -shared -O2 -fPIC -std=c++11 -fvisibility=hidden{meshoptInc} " +
                                $"-o \"{outPath}\" \"{srcApi}\" \"{srcImpl}\"{meshoptSrc}";
                 builds.Add(("macOS xatlas", "clang++", bArgs,
                     "Packages/com.genesis.roomscan/Runtime/Plugins/macOS/libxatlas.bundle"));
@@ -1778,6 +1780,58 @@ namespace Genesis.RoomScan.Editor
             }
 
             StartAsyncBuilds(builds);
+        }
+
+        /// <summary>
+        /// <c>-isysroot</c> for the newest installed macOS SDK whose version is not above the running macOS (Command Line
+        /// Tools or Xcode), with a trailing space; empty when none is found (clang then uses its default SDK).
+        /// </summary>
+        static string MacSdkArgs()
+        {
+            try
+            {
+                var osv = RunTool("sw_vers", "-productVersion");
+                if (!System.Version.TryParse(PadVersion(osv), out var os)) return "";
+                string best = null;
+                System.Version bestV = null;
+                foreach (string root in new[]
+                         {
+                             "/Library/Developer/CommandLineTools/SDKs",
+                             "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs",
+                         })
+                {
+                    if (!Directory.Exists(root)) continue;
+                    foreach (string dir in Directory.GetDirectories(root, "MacOSX*.sdk"))
+                    {
+                        string name = Path.GetFileNameWithoutExtension(dir).Substring("MacOSX".Length);
+                        if (!System.Version.TryParse(PadVersion(name), out var v) || v > os) continue;
+                        if (bestV == null || v > bestV) { bestV = v; best = dir; }
+                    }
+                }
+                return best != null ? $"-isysroot \"{best}\" " : "";
+            }
+            catch
+            {
+                return "";
+            }
+        }
+
+        static string PadVersion(string v)
+        {
+            v = (v ?? "").Trim();
+            return v.Contains(".") ? v : v + ".0";
+        }
+
+        static string RunTool(string exe, string args)
+        {
+            var psi = new System.Diagnostics.ProcessStartInfo(exe, args)
+            {
+                RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true,
+            };
+            using var proc = System.Diagnostics.Process.Start(psi);
+            string output = proc.StandardOutput.ReadToEnd();
+            proc.WaitForExit(5000);
+            return output;
         }
 
         static string FindNdkClang()

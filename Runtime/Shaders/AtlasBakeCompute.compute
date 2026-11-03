@@ -124,6 +124,7 @@ RWStructuredBuffer<uint> _ChartCover;  // [chart * _KfCount + kf], 4×4-sampled 
 RWStructuredBuffer<uint> _ChartSize;   // per chart: atlas texels (full res)
 StructuredBuffer<int>    _ChartBest;   // per chart: keyframe index, -1 none
 int   _KfIndex, _KfCount, _ChartCount;
+float _KfWeight;                       // this keyframe's sharpness weight on its view score (0 = unset, 1)
 float _ChartBoost;
 float _ChartMinCover;                  // min hero-cover fraction of the chart; 0 = off
 float _BlendFacingMin;                 // N·V gate for hero / blend admission
@@ -375,7 +376,9 @@ TexelView ProjectTexel(int idx, uint2 texel)
     vd /= max(vdLen, 0.001);
     float dotNV = dot(n, vd);
     ok = ok && dotNV > 0.05;
-    float score = ViewScore(dotNV, vdLen, _Fx);
+    // A keyframe taken while the head turned fast is smeared: its score is
+    // scaled down so a steady view wins and it only fills what none saw.
+    float score = ViewScore(dotNV, vdLen, _Fx) * (_KfWeight > 0.0 ? _KfWeight : 1.0);
     bool hero = ok && dotNV > _BlendFacingMin && vdLen >= _ViewCloseM && vdLen <= _ViewFarM;
 
     float3 camPt = mul(_ViewMat, float4(worldPt, 1)).xyz;
@@ -865,9 +868,11 @@ void BlendAccum(uint3 id : SV_DispatchThreadID)
     float g = min(255.0, (float)((kfColor >> 8) & 0xFF) * _KfGain.g);
     float b = min(255.0, (float)((kfColor >> 16) & 0xFF) * _KfGain.b);
 
-    // Fixed-point accumulation: scale by 256 to preserve fractional precision
-    // score is typically 0.01-10.0, so score*256 fits in uint range
-    uint ws = max(1u, (uint)(v.score * 256.0 * ramp * (preferred ? _ChartBoost : 1.0)));
+    // Fixed-point accumulation. A score is at most 1 (× the chart boost, at
+    // most 8) and as low as ~0.001 once a smeared keyframe's sharpness
+    // weight is on it, so scale by 16384: 8 × 16384 × 255 × (_MaxViews + 1)
+    // stays far inside a uint, and a weighted score still has a few bits.
+    uint ws = max(1u, (uint)(v.score * 16384.0 * ramp * (preferred ? _ChartBoost : 1.0)));
     InterlockedAdd(_AccumR[idx], (uint)(r * ws));
     InterlockedAdd(_AccumG[idx], (uint)(g * ws));
     InterlockedAdd(_AccumB[idx], (uint)(b * ws));

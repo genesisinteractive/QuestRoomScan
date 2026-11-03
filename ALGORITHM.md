@@ -920,7 +920,7 @@ Unity uses left-handed Y-up; COLMAP uses right-handed Y-down. The full round-tri
 **Quest → Server (export)**:
 - **Positions**: Negate Y component
 - **Rotations**: Apply `flip @ R_unity @ flip` where `flip = diag(1, -1, 1)` (determinant = -1, changes handedness)
-- **Intrinsics**: Adjust principal point (cx, cy) for center crop from sensor resolution to JPEG resolution
+- **Intrinsics**: the keyframe stores the sensor's (fx, fy, cx, cy) and resolution plus the image size. The image is the largest centred sensor region with the image's aspect, scaled to the image (Passthrough Camera Access's `CalcSensorCropRegion`): scale m = max(w / sw, h / sh), crop origin o = (sensor − image / m) / 2, image intrinsics (f·m, (c − o)·m) — `TextureRefinement.ImageIntrinsics`, the same model `VolumeIntegration.compute` uses for live colour. A plain centre crop at sensor scale is the special case m = 1; with a 1728² sensor and a 1280×960 image (m = 0.74) it put every photo 35 % too large on the mesh
 
 **Server → Quest (denormalized PLY)**:
 - PLY is in COLMAP world coordinates (Y-down)
@@ -952,7 +952,9 @@ The corrected pose drives that keyframe's depth pass and `BlendAccum`. A pure im
 
 **Admission is a ramp among hero views, not a fraction of a close-up winner.** A *hero* view is head-on (`N·V > blendFacingMin`, default 0.45) and in the working-distance band (0.45–3.5 m, peak 0.8–2 m). Close-ups still win pass 1 when they are the only view of a texel (`ResolveBlend` keeps that colour); they do not enter `BlendAccum`. Among heroes, weight is `score × smoothstep(blendMinFraction × best, best, score)`. Pass 2 walks keyframes best-hero-first so `maxViewsPerTexel` is top-K, not capture order.
 
-**Score** is `(N·V)² × distanceWeight(d) × gsdWeight(d, fx)` — not `N·V / d`. The old 1/distance term made a 20 cm graze beat a 1.5 m frontal look. Close-ups keep a small positive score so they still fill holes.
+**Score** is `(N·V)² × distanceWeight(d) × gsdWeight(d, fx) × sharpness` — not `N·V / d`. The old 1/distance term made a 20 cm graze beat a 1.5 m frontal look. Close-ups keep a small positive score so they still fill holes.
+
+**Sharpness** (`weighBySharpness`) is `max(sharpMinWeight, 1 / (1 + (ω / sharpHalfDegPerSec)²))` per keyframe, ω the head turn speed when it was taken: the collector's frame-to-frame measurement (`"av"` in `frames.jsonl`, timed by the camera's frame clock) or, for older packages, the larger of the turns to the neighbouring keyframes over the time between them (neighbours within 1 s). At a 10 ms exposure and Quest 3 focal length 25 deg/s is a ~4 px smear, 60 deg/s ~9 px; without the weight a quick scan in a dim room (most keyframes at 40–80 deg/s) baked smeared surfaces. It multiplies the score in both passes, so it decides pass-1 winners, chart preference and blend admission alike; a smeared view still wins a texel no steady view reached. `BlendAccum`'s fixed-point weights are `score × 16384` (was 256) so the lower scores keep their precision. The collector also captures a pose already covered only by keyframes at ≥ 2 × `sharpRetakeDegPerSec` once more when the head is at most `sharpRetakeDegPerSec` (15) there: a fast sweep saves its smeared frames first, and the steady look that follows used to be dropped as redundant.
 
 **Exposure equalisation** (`equalizeExposure`, with registration on). The passthrough camera re-exposes between frames. Pass 1 is now the working-distance winner, so gains match photos to standing brightness rather than to a close-up atlas. `ViewGainReduce` sums atlas vs photo over covered low-res pixels; C# clamps per-channel gain to `[1/exposureGainLimit, exposureGainLimit]` (1.6). `BlendAccum` multiplies the photo by `_KfGain`.
 

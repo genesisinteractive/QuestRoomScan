@@ -277,8 +277,8 @@ namespace Genesis.RoomScan
         /// Paints the voxels inside a spotlight cone from the head (half-angle
         /// <see cref="FreezeConeHalfAngle"/>) as "frozen" — they stop receiving
         /// integration updates until the user explicitly
-        /// <see cref="UnfreezeInView"/>s them. Frozen voxels count as refined,
-        /// so painting a settled region locks its share of progress.
+        /// <see cref="UnfreezeInView"/>s them. Their geometry and colour stay
+        /// exactly as they are; progress is unchanged (it has no frozen term).
         /// Integration keeps running on un-painted regions. The debug menu
         /// uses this head cone. Hosts with their own emitter should call the
         /// overload.
@@ -299,6 +299,25 @@ namespace Genesis.RoomScan
         {
             if (_scanner == null) { Logger.Error("RoomScanSession: RoomScanner not found"); return; }
             _scanner.FreezeInView(origin, direction, halfAngleDegrees, maxMetres);
+        }
+
+        /// <summary>
+        /// Show which surfaces a freeze (or unfreeze) with this cone would paint, before it is painted: the live
+        /// mesh lights them in <paramref name="color"/> (alpha = strength). Two slots (0 draws on top of 1), e.g. one
+        /// per hand. Cheap (shader globals); call every frame the cone moves, <see cref="ClearFreezePreview"/> to hide.
+        /// </summary>
+        public void SetFreezePreview(int slot, Vector3 origin, Vector3 direction, float halfAngleDegrees,
+            float maxMetres, Color color)
+        {
+            if (_scanner == null) return;
+            _scanner.SetFreezePreview(slot, origin, direction, halfAngleDegrees, maxMetres, color);
+        }
+
+        /// <summary>Hide a freeze preview (<see cref="SetFreezePreview"/>).</summary>
+        public void ClearFreezePreview(int slot)
+        {
+            if (_scanner == null) return;
+            _scanner.ClearFreezePreview(slot);
         }
 
         /// <summary>Half-angle, degrees, of the default head freeze cone.</summary>
@@ -355,15 +374,21 @@ namespace Genesis.RoomScan
             {
                 var tcs = new TaskCompletionSource<bool>();
                 void OnReady(Mesh _, Texture2D __) => tcs.TrySetResult(true);
+                // A refinement that throws ends the wait at once (it used to sit out the whole timeout).
+                void OnFailed(string message) =>
+                    tcs.TrySetException(new InvalidOperationException("Texture refinement failed: " + message));
                 _scanner.RefinedMeshReady += OnReady;
+                _scanner.RefinementFailed += OnFailed;
                 _scanner.StartTextureRefinement();
 
                 var timeout = Task.Delay(TimeSpan.FromMinutes(5));
                 var completed = await Task.WhenAny(tcs.Task, timeout);
                 _scanner.RefinedMeshReady -= OnReady;
+                _scanner.RefinementFailed -= OnFailed;
 
                 if (completed == timeout)
                     throw new TimeoutException("Texture refinement timed out (5 min)");
+                await tcs.Task;
             }
 
             bool saved = await _scanner.SaveScanAsync();
@@ -623,6 +648,45 @@ namespace Genesis.RoomScan
                 return 0;
             }
             return u.CopyHeadsetRoomWallFaces(dest, kind);
+        }
+
+        /// <summary>
+        /// Scene API labels of the captured room that contains the headset:
+        /// the names of <c>MRUKAnchor.SceneLabels</c> its anchors carry
+        /// (<c>BED</c>, <c>TABLE</c>, <c>COUCH</c>, <c>SCREEN</c>,
+        /// <c>WALL_FACE</c>, …), each once. Overlapping captures are unioned.
+        /// Empty in the editor and when the headset is not inside a captured
+        /// room. Clears <paramref name="dest"/>.
+        /// </summary>
+        public int CopyHeadsetRoomLabels(List<string> dest)
+        {
+            var u = Understanding();
+            if (u == null)
+            {
+                dest?.Clear();
+                return 0;
+            }
+            return u.CopyHeadsetRoomLabels(dest);
+        }
+
+        readonly List<string> _labelScratch = new List<string>();
+
+        /// <summary>
+        /// True when the captured room that contains the headset has an
+        /// anchor with this Scene API label (for example <c>"BED"</c>;
+        /// case-insensitive). False in the editor, when the headset is not
+        /// inside a captured room, and before the Scene API has loaded.
+        /// </summary>
+        public bool HeadsetRoomHasLabel(string label)
+        {
+            if (string.IsNullOrEmpty(label)) return false;
+            CopyHeadsetRoomLabels(_labelScratch);
+            for (int i = 0; i < _labelScratch.Count; i++)
+            {
+                if (string.Equals(_labelScratch[i], label, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            return false;
         }
 
         /// <summary>

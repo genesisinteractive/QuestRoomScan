@@ -507,6 +507,7 @@ void CloseSmallHoles(uint3 id : SV_DispatchThreadID)
 #define AR_FILLED       15
 #define AR_FLOOD_BLOCKS 16
 #define AR_VOID_BLOCKS  17
+#define AR_SEALED_FACES 18      // F–U faces where the U is not void (a sealed pocket: under a bed, inside a box)
 #define AR_WORDS        32
 
 // Labels, stored in an R8_UNorm 3D texture as label / 5.
@@ -647,6 +648,16 @@ void ClassifyVoxels(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID, uint g
 
 #pragma kernel BuildBlockLists
 
+// The block across from b along d holds S or U (beyond the volume: no).
+bool NeighbourHasSU(uint3 b, int3 d)
+{
+    int3 n = (int3)b + d;
+    bool has = false;
+    if (all(n >= 0) && all(n < (int3)gsBlockCount))
+        has = (gsBlockFlags[BlockIndexOf((uint3)n)] & 6u) != 0u;
+    return has;
+}
+
 [numthreads(64, 1, 1)]
 void BuildBlockLists(uint id : SV_DispatchThreadID)
 {
@@ -665,7 +676,19 @@ void BuildBlockLists(uint id : SV_DispatchThreadID)
         gsFloodList[slot] = id;
         InterlockedAdd(_AnalysisResult[AR_FLOOD_BLOCKS], 1u);
     }
-    if (hasF && (hasS || hasU))
+    // Faces are counted from the F voxel, and a voxel's six neighbours lie in its own block or one of the six
+    // blocks across its faces: a block of F alone still has faces where a neighbouring block holds S or U (a wall
+    // or a hole exactly on a block edge). Skipping it lost every such face once the air in front was all observed
+    // (a room whose walls sit on block edges read 0 m² of surface).
+    bool faces = hasF && (hasS || hasU);
+    if (hasF && !faces)
+    {
+        uint3 b = UnflattenBlock(id);
+        faces = NeighbourHasSU(b, int3(1, 0, 0)) || NeighbourHasSU(b, int3(-1, 0, 0))
+             || NeighbourHasSU(b, int3(0, 1, 0)) || NeighbourHasSU(b, int3(0, -1, 0))
+             || NeighbourHasSU(b, int3(0, 0, 1)) || NeighbourHasSU(b, int3(0, 0, -1));
+    }
+    if (faces)
     {
         uint slot;
         InterlockedAdd(gsFaceArgs[0], 1u, slot);
@@ -737,14 +760,18 @@ RWStructuredBuffer<uint>   gsLeakCounters; // [2] = leak faces (CcCount reads it
 uint  gsLeakCap;
 float gsCcCutTol;
 
-uint PackAxis(uint dirIndex) { return dirIndex; }   // 0..5: +x -x +y -y +z -z
+// The face's direction (0..5: +x -x +y -y +z -z) rides in w as a plain float. It used to be asfloat(dirIndex):
+// those bit patterns are denormals, which a GPU may flush to zero on the way through a float4 (Metal does), so every
+// face read back as +x and the hole fill capped the wrong neighbour (already solid: nothing written).
+float PackAxis(uint dirIndex) { return (float)dirIndex; }
+uint UnpackAxis(float w) { return min((uint)(w + 0.5), 5u); }
 
 static const int3 kLeakDirs[6] =
 {
     int3(1,0,0), int3(-1,0,0), int3(0,1,0), int3(0,-1,0), int3(0,0,1), int3(0,0,-1)
 };
 
-void TryFace(uint3 c, float3 cw, uint dirIndex, inout bool leak, inout uint surf)
+void TryFace(uint3 c, float3 cw, uint dirIndex, inout bool leak, inout uint surf, inout uint sealedU)
 {
     int3 d = kLeakDirs[dirIndex];
     int3 nbI = (int3)c + d;
@@ -756,7 +783,11 @@ void TryFace(uint3 c, float3 cw, uint dirIndex, inout bool leak, inout uint surf
         surf++;
         return;
     }
-    if (!IsExterior(nb)) return;
+    if (!IsExterior(nb))
+    {
+        if (l == LBL_U) sealedU++;
+        return;
+    }
 
     float3 face = cw + (float3)d * (0.5 * gsVoxSize);
     if (gsNearSurfaceCut(face, gsCcCutTol))
@@ -768,7 +799,7 @@ void TryFace(uint3 c, float3 cw, uint dirIndex, inout bool leak, inout uint surf
     uint slot;
     InterlockedAdd(gsLeakCounters[2], 1u, slot);
     if (slot < gsLeakCap)
-        gsLeakFaces[slot] = float4(cw, asfloat(PackAxis(dirIndex)));
+        gsLeakFaces[slot] = float4(cw, PackAxis(dirIndex));
 }
 
 #pragma kernel LeakFaces
@@ -783,11 +814,12 @@ void LeakFaces(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID)
 
     float3 cw = gsVoxelToWorld(c);
     bool leak = false;
-    uint surf = 0u;
+    uint surf = 0u, sealedU = 0u;
     [unroll]
     for (uint k = 0u; k < 6u; k++)
-        TryFace(c, cw, k, leak, surf);
+        TryFace(c, cw, k, leak, surf, sealedU);
     if (surf > 0u) InterlockedAdd(_AnalysisResult[AR_SURF_FACES], surf);
+    if (sealedU > 0u) InterlockedAdd(_AnalysisResult[AR_SEALED_FACES], sealedU);
     if (leak) SetLabel(c, LBL_LEAK);
 }
 
@@ -998,7 +1030,7 @@ void FillLeaks(uint id : SV_DispatchThreadID)
     if (c <= 0 || (uint)c > gsFillMaxFaces) return;
 
     float4 f = gsCcEdges[id];
-    uint dirIndex = min(asuint(f.w), 5u);
+    uint dirIndex = UnpackAxis(f.w);
     int3 step = kLeakDirs[dirIndex];
 
     int3 fv = (int3)floor(gsWorldToVoxelFloat(f.xyz));

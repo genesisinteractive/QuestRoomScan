@@ -33,6 +33,11 @@ namespace Genesis.RoomScan
         [SerializeField, Tooltip("Max angular velocity (deg/s) to accept a frame (rejects motion blur)")]
         private float maxAngularVelocity = 120f;
 
+        [SerializeField, Tooltip("A pose that is already covered is captured again when the head is this still " +
+            "(deg/s) and every keyframe already covering it was taken turning at least twice this fast. A fast " +
+            "sweep saves smeared frames first; this keeps one steady look at the same wall when it comes. 0 = off.")]
+        private float sharpRetakeDegPerSec = 15f;
+
         [SerializeField, Tooltip("Min seconds between captures to prevent burst saves. A capture costs the main thread one readback copy; the JPEG encode and the disk write run on a worker.")]
         private float minCaptureInterval = 0.25f;
 
@@ -55,12 +60,17 @@ namespace Genesis.RoomScan
         private readonly List<Vector3> _savedPositions = new();
         private readonly List<Quaternion> _savedRotations = new();
         private readonly List<float> _savedSceneZ = new();
+        private readonly List<float> _savedAngVel = new();
+        private int _sharpRetakes;
         private int _nextId;
         private int _pendingWrites;
         private float _lastCaptureTime;
         private bool _initialized;
         private Quaternion _prevRot;
-        private float _prevRotTime;
+        private double _prevRotTime;
+
+        /// <summary>Keyframes saved over a covered pose because they were steadier than every one there.</summary>
+        public int SharpRetakes => _sharpRetakes;
 
         /// <summary>Number of keyframes saved so far in this session.</summary>
         public int SavedCount => _nextId;
@@ -121,18 +131,27 @@ namespace Genesis.RoomScan
         {
             if (!_initialized || frame == null || _exportDir == null) return;
 
+            // Head turn speed from the previous camera frame to this one, on
+            // every frame (not only once the capture interval has passed, which
+            // averaged it over a quarter second): it is what smears this frame.
+            // Timed by the camera's own frame clock when there is one; the
+            // app frame a camera frame lands in jitters by most of a frame.
+            var provider = _scanner != null ? _scanner.ActiveCameraProvider : null;
+            double frameTime = provider is ICameraFrameTiming timing && provider.IsPlaying
+                ? timing.FrameTimeSeconds : Time.realtimeSinceStartupAsDouble;
+            float angVel = -1f;
+            double dt = frameTime - _prevRotTime;
+            if (_prevRotTime > 0d && dt > 0.001d && dt < 0.5d)
+                angVel = SmallAngleDeg(_prevRot, rot) / (float)dt;
+            _prevRot = rot;
+            _prevRotTime = frameTime;
+
             if (Time.time - _lastCaptureTime < minCaptureInterval) return;
+            if (angVel > maxAngularVelocity) return;
 
-            float dt = Time.time - _prevRotTime;
-            if (dt > 0.001f)
-            {
-                float angVel = Quaternion.Angle(_prevRot, rot) / dt;
-                _prevRot = rot;
-                _prevRotTime = Time.time;
-                if (angVel > maxAngularVelocity) return;
-            }
-
-            if (!ShouldCapture(pos, rot)) return;
+            if (!ShouldCapture(pos, rot, angVel, out bool retake)) return;
+            if (retake && (++_sharpRetakes <= 3 || _sharpRetakes % 25 == 0))
+                Logger.Info($"KeyframeCollector: steadier view of a covered pose ({angVel:F0} deg/s) — saved again ({_sharpRetakes} so far)");
 
             // Where the hands are right now, in this frame's own image. A
             // frame that is mostly hand is useless; a hand in the corner is
@@ -142,7 +161,8 @@ namespace Genesis.RoomScan
             string caps = null;
             if (capCount > 0)
             {
-                float coverage = HandCoverage(capCount, pos, rot, focalLen, currentRes);
+                Vector4 ic = TextureRefinement.ImageIntrinsics(focalLen, principalPt, sensorRes, currentRes);
+                float coverage = HandCoverage(capCount, pos, rot, new Vector2(ic.x, ic.y), new Vector2(ic.z, ic.w), currentRes);
                 if (coverage > maxHandCoverage)
                 {
                     if (++_skippedForHands <= 3 || _skippedForHands % 25 == 0)
@@ -156,6 +176,7 @@ namespace Genesis.RoomScan
             _savedPositions.Add(pos);
             _savedRotations.Add(rot);
             _savedSceneZ.Add(sceneZ);
+            _savedAngVel.Add(angVel);
             _lastCaptureTime = Time.time;
 
             float timestamp = Time.realtimeSinceStartup;
@@ -165,13 +186,24 @@ namespace Genesis.RoomScan
                 _pendingWrites++;
                 AsyncGPUReadback.Request(rt, 0, TextureFormat.RGBA32, req =>
                     OnReadbackComplete(req, id, timestamp, pos, rot,
-                        focalLen, principalPt, sensorRes, currentRes, caps, sceneZ));
+                        focalLen, principalPt, sensorRes, currentRes, caps, sceneZ, angVel));
             }
             else if (frame is Texture2D tex2d)
             {
                 SaveKeyframeData(tex2d.EncodeToJPG(jpegQuality), id, timestamp,
-                    pos, rot, focalLen, principalPt, sensorRes, currentRes, caps, sceneZ);
+                    pos, rot, focalLen, principalPt, sensorRes, currentRes, caps, sceneZ, angVel);
             }
+        }
+
+        /// <summary>
+        /// Angle between two rotations (degrees), exact for small angles. <c>Quaternion.Angle</c> reads anything under
+        /// about 0.16° as 0 (it treats a dot product within 1e-6 of 1 as equal), which is one camera frame at 5 deg/s.
+        /// </summary>
+        internal static float SmallAngleDeg(Quaternion a, Quaternion b)
+        {
+            Quaternion d = Quaternion.Inverse(a) * b;
+            float v = Mathf.Sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+            return 2f * Mathf.Atan2(v, Mathf.Abs(d.w)) * Mathf.Rad2Deg;
         }
 
         /// <summary>
@@ -180,7 +212,7 @@ namespace Genesis.RoomScan
         /// between its end points swept by the projected radius, clipped to
         /// the image. Capsules behind the camera contribute nothing.
         /// </summary>
-        float HandCoverage(int count, Vector3 camPos, Quaternion camRot, Vector2 focal, Vector2 res)
+        float HandCoverage(int count, Vector3 camPos, Quaternion camRot, Vector2 focal, Vector2 principal, Vector2 res)
         {
             if (res.x <= 1f || res.y <= 1f || focal.x <= 1f) return 0f;
             Quaternion inv = Quaternion.Inverse(camRot);
@@ -201,8 +233,8 @@ namespace Genesis.RoomScan
                 if (a.z < near) a = Vector3.Lerp(a, b, (near - a.z) / (b.z - a.z));
                 else if (b.z < near) b = Vector3.Lerp(b, a, (near - b.z) / (a.z - b.z));
                 float za = a.z, zb = b.z;
-                Vector2 pa = new Vector2(focal.x * a.x / za, focal.y * a.y / za) + res * 0.5f;
-                Vector2 pb = new Vector2(focal.x * b.x / zb, focal.y * b.y / zb) + res * 0.5f;
+                Vector2 pa = new Vector2(focal.x * a.x / za, focal.y * a.y / za) + principal;
+                Vector2 pb = new Vector2(focal.x * b.x / zb, focal.y * b.y / zb) + principal;
                 float pr = focal.x * r / Mathf.Min(za, zb);
                 // Footprint of the capsule's projection, clipped to the image rect.
                 Vector2 min = Vector2.Min(pa, pb) - Vector2.one * pr;
@@ -235,10 +267,16 @@ namespace Genesis.RoomScan
             return sb.ToString();
         }
 
-        private bool ShouldCapture(Vector3 pos, Quaternion rot)
+        /// <summary>
+        /// Whether this pose adds a view. <paramref name="retake"/>: it does only because it is steadier than every
+        /// keyframe that already covers it (see <see cref="sharpRetakeDegPerSec"/>).
+        /// </summary>
+        private bool ShouldCapture(Vector3 pos, Quaternion rot, float angVel, out bool retake)
         {
+            retake = false;
             bool inBandRedundant = false;
             bool newStandingYaw = true;
+            float steadiestCover = float.MaxValue;   // slowest turn among the keyframes near this pose
             for (int i = 0; i < _savedPositions.Count; i++)
             {
                 float dist = Vector3.Distance(pos, _savedPositions[i]);
@@ -248,14 +286,28 @@ namespace Genesis.RoomScan
                 bool sameBand = Mathf.Abs(along) < bandGapM;
 
                 if (dist < moveThreshold && angle < rotateThresholdDeg && sameBand)
+                {
                     inBandRedundant = true;
+                    // An unmeasured keyframe counts as steady: never retake over it.
+                    float v = i < _savedAngVel.Count && _savedAngVel[i] >= 0f ? _savedAngVel[i] : 0f;
+                    if (v < steadiestCover) steadiestCover = v;
+                }
                 if (sameBand && angle < standingYawDeg)
                     newStandingYaw = false;
             }
             // Keep a lean-in / step-back of the same pose, and keep a new
             // wall angle at this distance band even when a close-up already
             // sits at a similar yaw.
-            return !inBandRedundant || newStandingYaw;
+            if (!inBandRedundant || newStandingYaw) return true;
+            // Covered, but only by smeared frames: keep one steady view. After
+            // it the pose has a steady keyframe, so there is one retake per pose.
+            if (sharpRetakeDegPerSec > 0f && angVel >= 0f && angVel <= sharpRetakeDegPerSec &&
+                steadiestCover >= 2f * sharpRetakeDegPerSec)
+            {
+                retake = true;
+                return true;
+            }
+            return false;
         }
 
         /// <summary>
@@ -284,7 +336,7 @@ namespace Genesis.RoomScan
 
         private void OnReadbackComplete(AsyncGPUReadbackRequest req, int id, float timestamp,
             Vector3 pos, Quaternion rot, Vector2 focalLen, Vector2 principalPt,
-            Vector2 sensorRes, Vector2 currentRes, string caps, float sceneZ)
+            Vector2 sensorRes, Vector2 currentRes, string caps, float sceneZ, float angVel)
         {
             _pendingWrites--;
             if (req.hasError)
@@ -320,7 +372,7 @@ namespace Genesis.RoomScan
                 SaveKeyframeData(() => ImageConversion.EncodeArrayToJPG(
                         pixels, UnityEngine.Experimental.Rendering.GraphicsFormat.R8G8B8A8_SRGB,
                         (uint)w, (uint)h, 0, quality),
-                    id, timestamp, pos, rot, focalLen, principalPt, sensorRes, currentRes, caps, sceneZ);
+                    id, timestamp, pos, rot, focalLen, principalPt, sensorRes, currentRes, caps, sceneZ, angVel);
             }
             catch (Exception e)
             {
@@ -330,12 +382,12 @@ namespace Genesis.RoomScan
 
         private void SaveKeyframeData(byte[] jpgBytes, int id, float timestamp,
             Vector3 pos, Quaternion rot, Vector2 focalLen, Vector2 principalPt,
-            Vector2 sensorRes, Vector2 currentRes, string caps = null, float sceneZ = 0f)
-            => SaveKeyframeData(() => jpgBytes, id, timestamp, pos, rot, focalLen, principalPt, sensorRes, currentRes, caps, sceneZ);
+            Vector2 sensorRes, Vector2 currentRes, string caps = null, float sceneZ = 0f, float angVel = -1f)
+            => SaveKeyframeData(() => jpgBytes, id, timestamp, pos, rot, focalLen, principalPt, sensorRes, currentRes, caps, sceneZ, angVel);
 
         private void SaveKeyframeData(Func<byte[]> encode, int id, float timestamp,
             Vector3 pos, Quaternion rot, Vector2 focalLen, Vector2 principalPt,
-            Vector2 sensorRes, Vector2 currentRes, string caps = null, float sceneZ = 0f)
+            Vector2 sensorRes, Vector2 currentRes, string caps = null, float sceneZ = 0f, float angVel = -1f)
         {
             Task.Run(() =>
             {
@@ -381,6 +433,9 @@ namespace Genesis.RoomScan
                     sb.Append(",\"h\":").Append((int)currentRes.y);
                     if (sceneZ > 0.05f)
                         sb.Append(",\"z\":").Append(sceneZ.ToString("F3", ci));
+                    // Head turn speed at capture (deg/s): the bake weighs smeared frames down.
+                    if (angVel >= 0f)
+                        sb.Append(",\"av\":").Append(angVel.ToString("F1", ci));
                     // Hand / forearm capsules at capture: "x y z x y z r;..." (no
                     // commas — the manifest reader splits lines on them).
                     if (!string.IsNullOrEmpty(caps))
@@ -418,6 +473,7 @@ namespace Genesis.RoomScan
             _savedPositions.Add(pos);
             _savedRotations.Add(rot);
             _savedSceneZ.Add(0f);
+            _savedAngVel.Add(-1f);
             SaveKeyframeData(jpgBytes, id, timestamp, pos, rot,
                 focalLen, principalPt, sensorRes, currentRes);
             return id;
@@ -431,9 +487,11 @@ namespace Genesis.RoomScan
             _savedPositions.Clear();
             _savedRotations.Clear();
             _savedSceneZ.Clear();
+            _savedAngVel.Clear();
             _nextId = 0;
-            _prevRotTime = 0f;
+            _prevRotTime = 0d;
             _skippedForHands = 0;
+            _sharpRetakes = 0;
             _mainCopyMs = _mainCopyMaxMs = 0;
             lock (_workerStats) { _encodeMs = _writeMs = _encodeMaxMs = _writeMaxMs = 0; _workerDone = 0; }
         }

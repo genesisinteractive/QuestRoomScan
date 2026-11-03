@@ -287,6 +287,12 @@ namespace Genesis.RoomScan
         [Tooltip("Cap leaks up to this area (m²) by turning the two unknown voxels behind each leak face solid, continued from the free voxel's own TSDF value so the cap lands on the neighbouring surface. Frontier-sized components are never capped.")]
         [SerializeField] private bool fillLeaks = true;
         [SerializeField, Range(0.01f, 2f)] private float fillLeakMaxAreaM2 = 0.25f;
+        [Tooltip("A leak that has not shrunk for this long near the end of a scan (total at most stallMaxLeakM2) gets the same cap, up to stallFillMaxAreaM2 per hole: depth never closes a window, a mirror or a black screen, and the scan could not finish. Off when stallFillMaxAreaM2 is no larger than fillLeakMaxAreaM2.")]
+        [SerializeField, Range(0f, 120f)] private float stallSeconds = 20f;
+        [SerializeField, Range(0.25f, 4f)] private float stallFillMaxAreaM2 = 1f;
+        [SerializeField, Range(0.25f, 10f)] private float stallMaxLeakM2 = 2f;
+        [Tooltip("The leak must fall (or grow) by this fraction to count as moving; less is a stall.")]
+        [SerializeField, Range(0.02f, 0.5f)] private float stallChange = 0.1f;
         [Tooltip("Leak faces within this many voxels of a clip plane, the room AABB or the volume edge are cuts (doorway, expand), not holes.")]
         [SerializeField, Range(1f, 4f)] private float cutToleranceVoxels = 2f;
         [Tooltip("Fine-flood dispatches per frame over the shell blocks, and how many frames. Each dispatch runs 8 rounds inside the block in LDS; cross-block travel is one dispatch per block. Void reaches a hole through a few voxels of shell, so 2 × 3 is generous.")]
@@ -317,6 +323,16 @@ namespace Genesis.RoomScan
         public int LeakFills { get; private set; }
         /// <summary>True once a cycle has completed for the current scan.</summary>
         public bool AnalysisAvailable { get; private set; }
+        /// <summary>Surface area counted as free–solid faces (m²).</summary>
+        public float FaceSurfaceAreaM2 { get; private set; }
+        /// <summary>Surface area estimated from the surface band's voxels (m²): a second measure that does not depend
+        /// on which faces were visited. <see cref="MeshClosure.SurfaceAreaM2"/> is the larger of the two.</summary>
+        public float BandSurfaceAreaM2 { get; private set; }
+        /// <summary>Free faces onto a sealed unknown pocket (under a bed, inside a box): neither surface nor leak.</summary>
+        public int SealedUnknownFaces { get; private set; }
+        /// <summary>The leak has stopped shrinking near the end of the scan: holes up to <c>stallFillMaxAreaM2</c> are
+        /// being capped.</summary>
+        public bool LeakStalled { get; private set; }
 
         /// <summary>
         /// Extra torso capsules (legacy <see cref="RoomScanner.AddExclusionZone"/>).
@@ -460,7 +476,11 @@ namespace Genesis.RoomScan
             _dummyCamTex.Apply(false, true);
         }
 
-        private void OnDestroy()
+        private void OnDestroy() => ReleaseAll();
+
+        /// <summary>Free every GPU resource (what <c>OnDestroy</c> does; edit-mode tools call it themselves, since
+        /// a component added in edit mode never gets <c>OnDestroy</c>).</summary>
+        internal void ReleaseAll()
         {
             ReleaseVolumes();
             ReleaseAnalysisBuffers();
@@ -468,8 +488,14 @@ namespace Genesis.RoomScan
             _shellNrm?.Release();
             _shellResult?.Release();
             _shellPos = _shellNrm = _shellResult = null;
-            if (_camFrameCopy) Destroy(_camFrameCopy);
-            if (_dummyCamTex) Destroy(_dummyCamTex);
+            if (_camFrameCopy) DestroyObject(_camFrameCopy);
+            if (_dummyCamTex) DestroyObject(_dummyCamTex);
+        }
+
+        static void DestroyObject(UnityEngine.Object o)
+        {
+            if (Application.isPlaying) Destroy(o);
+            else DestroyImmediate(o);
         }
 
         /// <summary>
@@ -482,8 +508,8 @@ namespace Genesis.RoomScan
             _frustumVolume?.Release();
             _frustumVolume = null;
             _frustumReady = false;
-            if (_volume) { Destroy(_volume); _volume = null; }
-            if (_colorVolume) { Destroy(_colorVolume); _colorVolume = null; }
+            if (_volume) { DestroyObject(_volume); _volume = null; }
+            if (_colorVolume) { DestroyObject(_colorVolume); _colorVolume = null; }
             IntegrationCount = 0;
             Logger.Info("VolumeIntegrator: GPU volumes released");
         }
@@ -680,13 +706,56 @@ namespace Genesis.RoomScan
             _analysisResult = _blockFlags = _floodList = _faceList = null;
             _floodArgs = _faceArgs = null;
             _leakFaces = _leakCounters = _ccHashKey = _ccHashVal = _ccLabel = _ccComp = null;
-            if (_labelVolume != null) { _labelVolume.Release(); Destroy(_labelVolume); _labelVolume = null; }
+            if (_labelVolume != null) { _labelVolume.Release(); DestroyObject(_labelVolume); _labelVolume = null; }
         }
+
+        /// <summary>
+        /// The stall clock: the leak is "moving" while it changes by more than <c>stallChange</c> from where the clock
+        /// last started; held for <c>stallSeconds</c> at or under <c>stallMaxLeakM2</c> (the end of a scan, not its
+        /// frontier) it is stalled, and the next cycles cap holes up to <c>stallFillMaxAreaM2</c>. Capping makes it
+        /// move again, which ends the stall.
+        /// </summary>
+        void UpdateStall(float leak, float now)
+        {
+            if (!fillLeaks || stallFillMaxAreaM2 <= fillLeakMaxAreaM2)
+            {
+                LeakStalled = false;
+                return;
+            }
+            bool moved = _stallRefLeak < 0f
+                         || leak < _stallRefLeak * (1f - stallChange) - 0.005f
+                         || leak > _stallRefLeak * (1f + stallChange) + 0.02f;
+            if (moved)
+            {
+                if (LeakStalled)
+                    Logger.Info($"[VolumeIntegrator] leak moving again ({_stallRefLeak:F2} → {leak:F2} m²): normal hole caps");
+                _stallRefLeak = leak;
+                _stallRefTime = now;
+                LeakStalled = false;
+                return;
+            }
+            if (LeakStalled || leak <= 0f || leak > stallMaxLeakM2 || now - _stallRefTime < stallSeconds) return;
+            LeakStalled = true;
+            Logger.Info($"[VolumeIntegrator] leak stalled {now - _stallRefTime:0} s at {leak:F2} m²: capping holes up to " +
+                        $"{stallFillMaxAreaM2:F2} m² (a window, a mirror, a black screen: depth cannot close them)");
+        }
+
+        float _stallRefLeak = -1f, _stallRefTime;
+
+        /// <summary>Tools: start the next analysis cycle at the next <see cref="StepAnalysis"/> (edit mode has no
+        /// frame clock to wait on).</summary>
+        internal void RequestAnalysisNow() => _lastAnalysisTime = float.NegativeInfinity;
+
+        /// <summary>Analysis cycles read back since the last <see cref="ResetAnalysis"/> (tools).</summary>
+        internal int AnalysisCycles { get; private set; }
 
         /// <summary>Forget the last cycle's numbers (scan start).</summary>
         public void ResetAnalysis()
         {
             AnalysisAvailable = false;
+            AnalysisCycles = 0;
+            LeakStalled = false;
+            _stallRefLeak = -1f;
             _analysisState = AnalysisState.Idle;
             _lastAnalysisTime = 0f;
             SurfaceVoxelCount = FrozenSurfaceCount = ColoredSurfaceCount = ConfidentSurfaceCount = 0;
@@ -719,7 +788,8 @@ namespace Genesis.RoomScan
                     compute.SetFloat(CcCutTolID, cutToleranceVoxels * voxelSize);
                     float faceArea = voxelSize * voxelSize;
                     compute.SetInt(CcMinFacesID, Mathf.Max(1, Mathf.RoundToInt(holeMinAreaM2 / faceArea)));
-                    compute.SetInt(FillMaxFacesID, Mathf.Max(1, Mathf.RoundToInt(fillLeakMaxAreaM2 / faceArea)));
+                    float fillMax = LeakStalled ? Mathf.Max(fillLeakMaxAreaM2, stallFillMaxAreaM2) : fillLeakMaxAreaM2;
+                    compute.SetInt(FillMaxFacesID, Mathf.Max(1, Mathf.RoundToInt(fillMax / faceArea)));
                     BindScanPriors(compute);
                     BindAnalysisVolumes();
 
@@ -812,8 +882,18 @@ namespace Genesis.RoomScan
                 (int)r[11] * 0.001f, (int)r[12] * 0.001f, (int)r[13] * 0.001f);
 
             float leakArea = leakTotal * faceArea;
-            float surfaceArea = surfaceFaces * faceArea;
+            // Two measures of the surface: its free–solid faces, and its band (|tsdf| < 0.3 round every crossing is
+            // 0.6 · voxelDistance thick: rounded up, the voxels it holds per surface cell). The faces undercounted
+            // badly once (faces on block edges were skipped: a room read 4 m² of 48 and could not reach 92 %); the
+            // band does not depend on which blocks were visited. The band reads a little low on slanted surfaces
+            // (a 20° room: 56.6 m² of 60.2), so it is a floor under the faces, not a replacement.
+            FaceSurfaceAreaM2 = surfaceFaces * faceArea;
+            float perCell = Mathf.Max(1f, Mathf.Ceil(0.6f * voxelDistance / voxelSize - 1e-3f));
+            BandSurfaceAreaM2 = SurfaceVoxelCount * faceArea / perCell;
+            SealedUnknownFaces = (int)r[18];
+            float surfaceArea = Mathf.Max(FaceSurfaceAreaM2, BandSurfaceAreaM2);
             float closure = surfaceArea + leakArea > 0f ? surfaceArea / (surfaceArea + leakArea) : 0f;
+            UpdateStall(leakArea, Time.unscaledTime);
 
             Closure = new MeshClosure(
                 closure, leakArea, surfaceArea, (int)r[9], leakTotal, cutFaces,
@@ -821,6 +901,7 @@ namespace Genesis.RoomScan
             Progress = Mathf.Clamp01(closure * (1f - refinementInfluence * (1f - Refinement)));
             LeakFills += (int)r[15];
             AnalysisAvailable = true;
+            AnalysisCycles++;
         }
 
         // ── Shell coverage ──────────────────────────────────────────────

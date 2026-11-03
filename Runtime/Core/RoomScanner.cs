@@ -90,8 +90,12 @@ namespace Genesis.RoomScan
         public int ConfidentSurfaceCount;
         /// <summary>Total leak area, m². The number a host gates on ("under 0.3 m² still open").</summary>
         public float LeakAreaM2;
-        /// <summary>Surface area estimate, m².</summary>
+        /// <summary>Surface area estimate, m²: the larger of the free–solid face count and the surface band's
+        /// voxel estimate.</summary>
         public float SurfaceAreaM2;
+        /// <summary>The leak stopped shrinking near the end of the scan (a window, a mirror, a black screen that
+        /// depth cannot close): holes up to the integrator's stall cap are being capped so the scan can finish.</summary>
+        public bool LeakStalled;
         /// <summary>Leak patches at or above the minimum area.</summary>
         public int HoleCount;
         /// <summary>Largest leak patch (the frontier while scanning), or default.</summary>
@@ -239,6 +243,33 @@ namespace Genesis.RoomScan
         //  Public read-only state
         // ─────────────────────────────────────────────────────────────
 
+        /// <summary>How many freeze preview cones the live mesh can show at once (<see cref="SetFreezePreview"/>).</summary>
+        public const int FreezePreviewSlots = 2;
+
+        /// <summary>
+        /// Light the live mesh's surfaces inside a cone: what a <see cref="FreezeInView(Vector3, Vector3, float, float)"/>
+        /// or <see cref="UnfreezeInView(Vector3, Vector3, float, float)"/> with the same cone would paint, shown before it
+        /// is painted. <paramref name="slot"/> 0 or 1 (slot 0 draws on top); <paramref name="color"/>'s alpha is the
+        /// strength. Stays until changed or <see cref="ClearFreezePreview"/>; shader globals only, no volume work.
+        /// </summary>
+        public void SetFreezePreview(int slot, Vector3 origin, Vector3 direction, float halfAngleDegrees, float maxMetres,
+            Color color)
+        {
+            if (slot < 0 || slot >= FreezePreviewSlots) return;
+            Vector3 axis = direction.sqrMagnitude > 1e-8f ? direction.normalized : Vector3.forward;
+            float cos = Mathf.Cos(Mathf.Clamp(halfAngleDegrees, 0.5f, 89f) * Mathf.Deg2Rad);
+            Shader.SetGlobalVector(PreviewAID[slot], new Vector4(origin.x, origin.y, origin.z, cos));
+            Shader.SetGlobalVector(PreviewBID[slot], new Vector4(axis.x, axis.y, axis.z, Mathf.Max(0f, maxMetres)));
+            Shader.SetGlobalVector(PreviewCID[slot], new Vector4(color.r, color.g, color.b, Mathf.Clamp01(color.a)));
+        }
+
+        /// <summary>Hide a freeze preview cone (<see cref="SetFreezePreview"/>).</summary>
+        public void ClearFreezePreview(int slot)
+        {
+            if (slot < 0 || slot >= FreezePreviewSlots) return;
+            Shader.SetGlobalVector(PreviewCID[slot], Vector4.zero);
+        }
+
         /// <summary>Toggle blue tint overlay on frozen voxels in live mesh modes.</summary>
         public bool ShowFreezeTint
         {
@@ -318,6 +349,12 @@ namespace Genesis.RoomScan
         public event Action<ScanRenderMode> RenderModeChanged;
         /// <summary>Raised when a refined mesh + atlas becomes available (after refinement or package load).</summary>
         public event Action<Mesh, Texture2D> RefinedMeshReady;
+
+        /// <summary>
+        /// On-device texture refinement threw (its message). <see cref="RefinedMeshReady"/> will not fire for this run, so
+        /// anything waiting on it can stop waiting.
+        /// </summary>
+        public event Action<string> RefinementFailed;
 
         /// <summary>
         /// Raised each frame a passthrough camera frame is fed to the volume integrator.
@@ -590,7 +627,9 @@ namespace Genesis.RoomScan
                     Logger.Info(
                         $"[RoomScanner] Analysis: progress={_volumeIntegrator.Progress:P0} closure={cl.Closure:P0} " +
                         $"refinement={_volumeIntegrator.Refinement:P0} (confident {_volumeIntegrator.ConfidentFraction:P0}) " +
-                        $"leak={cl.LeakAreaM2:F2}m2 surface={cl.SurfaceAreaM2:F1}m2 holes={cl.HoleCount} " +
+                        $"leak={cl.LeakAreaM2:F2}m2 surface={cl.SurfaceAreaM2:F1}m2 (faces {_volumeIntegrator.FaceSurfaceAreaM2:F1} " +
+                        $"band {_volumeIntegrator.BandSurfaceAreaM2:F1} sealedU {_volumeIntegrator.SealedUnknownFaces}) holes={cl.HoleCount} " +
+                        (_volumeIntegrator.LeakStalled ? "STALLED (capping) " : "") +
                         $"largest={cl.LargestHole.AreaM2:F2}m2 (~{cl.LargestHole.ApproxWidthMetres:F2}m across) " +
                         $"@({cl.LargestHole.Center.x:F2},{cl.LargestHole.Center.y:F2},{cl.LargestHole.Center.z:F2}) " +
                         $"faces: leak={cl.LeakFaces} cut={cl.CutFaces} " +
@@ -1353,6 +1392,7 @@ namespace Genesis.RoomScan
             {
                 Logger.Error($"Texture refinement failed: {e.Message}\n{e.StackTrace}");
                 RefineStatus = "Failed";
+                RefinementFailed?.Invoke(e.Message);
             }
             finally
             {
@@ -2083,6 +2123,7 @@ namespace Genesis.RoomScan
                 cov.HoleCount = cl.HoleCount;
                 cov.LargestHole = cl.LargestHole;
                 cov.LeakFills = _volumeIntegrator.LeakFills;
+                cov.LeakStalled = _volumeIntegrator.LeakStalled;
             }
 
             if (_shellTracker != null && _shellTracker.Available)
@@ -2137,6 +2178,7 @@ namespace Genesis.RoomScan
             Shader.SetGlobalFloat(WireThicknessID, wireThickness);
             Shader.SetGlobalFloat(NoFreezeTintID, showFreezeTint ? 0f : 1f);
             Shader.SetGlobalFloat(ShowHolesID, _showHoles ? 1f : 0f);
+            for (int i = 0; i < FreezePreviewSlots; i++) ClearFreezePreview(i);
         }
 
         private int _colorFrameLog;
@@ -2204,6 +2246,12 @@ namespace Genesis.RoomScan
         }
 
         private static readonly int NoFreezeTintID = Shader.PropertyToID("_RSNoFreezeTint");
+        private static readonly int[] PreviewAID =
+            { Shader.PropertyToID("_RSPreviewCone0A"), Shader.PropertyToID("_RSPreviewCone1A") };
+        private static readonly int[] PreviewBID =
+            { Shader.PropertyToID("_RSPreviewCone0B"), Shader.PropertyToID("_RSPreviewCone1B") };
+        private static readonly int[] PreviewCID =
+            { Shader.PropertyToID("_RSPreviewCone0C"), Shader.PropertyToID("_RSPreviewCone1C") };
         private static readonly int ShowHolesID = Shader.PropertyToID("_RSShowHoles");
         private static readonly int TriAvailableID = Shader.PropertyToID("_RSTriAvailable");
         private static readonly int WireframeID = Shader.PropertyToID("_RSWireframe");

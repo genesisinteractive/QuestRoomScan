@@ -63,7 +63,7 @@ This is the case the package was built for. Quest's built-in room mesh gives you
 - **OVRSpatialAnchor Relocation** — `RoomAnchorManager` creates a persisted `OVRSpatialAnchor` per scan package for reliable cross-session relocation. The package also stores the Scene API UUID of the MRUK room that contained that anchor (`sceneRoomUuid` in `anchor.json` / the manifest) so hosts can test the headset against **that** room, not any captured space. Per-artifact creation matrices in `anchor.json` track when each artifact was created relative to the spatial anchor, enabling accurate relocation even for artifacts created across different sessions. Falls back to MRUK floor anchor if spatial anchor localization fails.
 - **Temporal Stabilization** — Adaptive per-vertex temporal blending on GPU prevents mesh jitter while allowing fast convergence. Optional live-mesh **birth fade** and **hold-and-morph** are presentation-only (forward shader). Texture refinement / PLY call `ExtractForAuthoring` and project onto extractor `pos`, never the in-flight lerp.
 - **Exclusion Zones** — Capsule rejection around the operator (torso 0.35 m + hand/forearm) so the body is not reconstructed; freeze skips those voxels. Optional Meta depth hand-removal. Up to 64 capsules.
-- **Analytic Scan Progress** — every TSDF voxel is observed-free, observed-solid or unknown; unknown that connects to the outside of the volume is *exterior*. Free–solid faces are the surface, free–exterior faces are **leaks** — exactly where passthrough shows through the mesh. `Closure = surface / (surface + leak)`; `ScanCoverage.LeakAreaM2` is the absolute area still open, `HoleCount` / `LargestHole` list the patches, small ones are capped automatically, and the mesh tints them red — all from one GPU label volume, so they agree. Refinement is the share of surface voxels whose TSDF weight says they have stopped moving. Time-sliced GPU work, one 128-byte readback per second; no camera pose, no rays, no scene model.
+- **Analytic Scan Progress** — every TSDF voxel is observed-free, observed-solid or unknown; unknown that connects to the outside of the volume is *exterior*. Free–solid faces are the surface, free–exterior faces are **leaks** — exactly where passthrough shows through the mesh. `Closure = surface / (surface + leak)`; `ScanCoverage.LeakAreaM2` is the absolute area still open, `HoleCount` / `LargestHole` list the patches, small ones are capped automatically (and larger ones up to 1 m² once the leak has stopped shrinking for 20 s, `ScanCoverage.LeakStalled`: a window or a mirror depth cannot close), and the mesh tints them red — all from one GPU label volume, so they agree. Refinement is the share of surface voxels whose TSDF weight says they have stopped moving. Time-sliced GPU work, one 128-byte readback per second; no camera pose, no rays, no scene model.
 - **Shell Coverage** — With `RoomUnderstanding`, the captured room hull is sampled into ≤ 16k cells and marched against the TSDF once a second: `ScanCoverage.ShellCoverage` is how much of the shell has scanned matter in front of it (doorways, doors, windows excluded), `LargestGap` / `CopyShellGaps` say where the unscanned patches are, and small wall / floor / ceiling gaps whose neighbours lie on one plane are auto-filled with a soft plane stamp that real depth can still override. Guidance and acceleration only — it never feeds progress.
 - **Gaussian Splat Training & Rendering** — Keyframe capture + point cloud export → PC server training → trained PLY download → on-device UGS rendering
 - **VR Debug Menu** — Two-panel world-space UI Toolkit HUD with left navigation (Scan, Saved Scans, Refine, Gaussian Splat, Tools) and right detail views. Includes scan browser with load/delete per package (with delete confirmation), "Load Refined Only" for fast game-mode loading, context-sensitive artifact deletion, and dynamic button disabled states. Scene Objects toggle with live count. Navigation tabs for Refine and Gaussian Splat are automatically disabled when their respective modules are not attached.
@@ -116,12 +116,12 @@ Add to your project's `Packages/manifest.json`, pinned to a release tag:
 ```json
 {
   "dependencies": {
-    "com.genesis.roomscan": "https://github.com/genesisinteractive/QuestRoomScan.git#v1.3.3"
+    "com.genesis.roomscan": "https://github.com/genesisinteractive/QuestRoomScan.git#v1.4.0"
   }
 }
 ```
 
-Drop the `#v1.3.3` suffix to track `main`. Releases and their notes are in
+Drop the `#v1.4.0` suffix to track `main`. Releases and their notes are in
 [`CHANGELOG.md`](CHANGELOG.md); `main` only moves by squash-merged release PR.
 
 For Gaussian Splat support, also add the optional dependency:
@@ -333,7 +333,7 @@ QuestRoomScan captures keyframes and a dense point cloud during scanning, upload
 
 ### On-Device Capture (automatic during scanning)
 
-- **KeyframeCollector**: Motion-gated JPEG frames + camera poses saved directly into the active scan package (`keyframes/images/*.jpg`, `keyframes/frames.jsonl`). Captures are triggered by camera movement — you get more keyframes by looking at the room from different angles.
+- **KeyframeCollector**: Motion-gated JPEG frames + camera poses saved directly into the active scan package (`keyframes/images/*.jpg`, `keyframes/frames.jsonl`). Captures are triggered by camera movement — you get more keyframes by looking at the room from different angles. Each keyframe records the head turn speed at capture (`"av"`, deg/s); a pose covered only by fast-turn (smeared) keyframes is captured once more when the head holds still on it (`sharpRetakeDegPerSec`, default 15).
 - **PointCloudExporter**: GPU mesh vertices exported as binary PLY (`points3d.ply`) via `AsyncGPUReadback`. Exported on demand — automatically before GS training upload, or manually via the debug menu's Tools view.
 
 ### Server Training (via [RoomScan-GaussianSplatServer](https://github.com/genesisinteractive/RoomScan-GaussianSplatServer))
@@ -727,6 +727,8 @@ Set `TextureRefinement.postBakeSimplificationRatio` in the Inspector (default **
 
 `refineKeyframePoses` (default on) aligns each keyframe to the first-pass atlas with a low-resolution ZNCC image shift and folds it into the keyframe rotation before blending. `chartBestViewBoost` (default 3) lets the view that scores best over a whole UV chart carry that chart, moving view switches to chart borders. See ALGORITHM.md §15.1a–b.
 
+`weighBySharpness` (default on) scales every keyframe's view score by `1 / (1 + (speed / sharpHalfDegPerSec)²)` (half weight at 25 deg/s, floor `sharpMinWeight` 0.05), from the head speed recorded at capture or, in older packages, the turn between neighbouring keyframes. A steady view wins a surface; a photo smeared by a fast turn only fills what no steady view saw. Scanning in a dim room (longer exposure) makes this matter most.
+
 ### `RoomScanSession` API Surface
 
 Everything a game needs lives on one component. `[RequireComponent(typeof(RoomScanner))]` pulls in the scanner; `RoomScanPersistence` is auto-added by the wizard.
@@ -749,6 +751,8 @@ Everything a game needs lives on one component. `[RequireComponent(typeof(RoomSc
 | `IsHeadsetInsideBoundSceneRoom` | `bool` | Headset is inside the active package's bound room — not some other captured space. False when no package is loaded. Always true in the editor |
 | `CopyHeadsetRoomWallFaces(List, SceneFaceKind)` | `int` | Vertical planes of every loaded room that contains the headset. Host passes `SceneFaceKind` (`Wall`, `Screen`, or both). Empty in the editor and when not inside a captured room. |
 | `HeadsetSceneRoomUuid` | `Guid` | Scene API UUID of the room that contains the headset, or empty. Not the active scan package (`BoundSceneRoomUuid`) |
+| `CopyHeadsetRoomLabels(List<string>)` | `int` | Scene API labels of the room that contains the headset: the `MRUKAnchor.SceneLabels` names its anchors carry (`BED`, `TABLE`, `COUCH`, `SCREEN`, `WALL_FACE`, …), each once. Empty in the editor and when not inside a captured room |
+| `HeadsetRoomHasLabel(string)` | `bool` | The room that contains the headset has an anchor with this label (for example `"BED"`, case-insensitive). False in the editor, outside a captured room, and before the Scene API has loaded |
 | `TryRebindBoundSceneRoomIfHeadsetMatches()` | `bool` | After `LoadAsync`: true when headset and the localized spatial anchor share a captured room; persists that room's current Scene API UUID (Space Setup redo in the same physical room). False in a hallway or a different set-up room |
 | `ProgressUpdated` | `event Action<ScanProgress>` | Per-frame progress while scanning. `OverallProgress = Coverage.Closure × (1 − 0.4 × (1 − Coverage.Refinement))` — closure is surface ÷ (surface + leak) from the boundary of observed free space; no camera or scene model involved. `Coverage.LeakAreaM2` is the absolute area still open (the natural gate), `HoleCount` / `LargestHole` locate the patches. With `RoomUnderstanding`, `Coverage.ShellCoverage` / `LargestGap` add hull-based guidance and drive auto-fill, but never the progress number. Hosts gate finalize themselves — the package does not |
 | `CopyShellGaps(List<ShellGap>)` | `int` | Largest uncovered shell patches (≤ 8, largest first): centre, normal, cell count, area, surface kind. 0 when shell coverage is unavailable |
@@ -766,6 +770,8 @@ Everything a game needs lives on one component. `[RequireComponent(typeof(RoomSc
 | `FreezeInView(origin, direction, halfAngleDegrees, maxMetres)` | `void` | Same paint, host-supplied cone. `maxMetres` 0 is unbounded |
 | `UnfreezeInView()` | `void` | Inverse of `FreezeInView` for re-capture of bad regions |
 | `UnfreezeInView(origin, direction, halfAngleDegrees, maxMetres)` | `void` | Inverse of the custom-cone freeze |
+| `SetFreezePreview(slot, origin, direction, halfAngleDegrees, maxMetres, color)` | `void` | Light the live mesh's surfaces inside that cone (what a freeze or unfreeze with it would paint) before painting; slots 0 and 1, alpha is strength |
+| `ClearFreezePreview(slot)` | `void` | Hide a freeze preview |
 | `FinalizeScanAsync()` | `Task<ScanResult>` | Stop scanning → refine → save; returns mesh + atlas + package id + `AnchorFrameMesh`. Releases the live TSDF when `PresentRefinedWhenReady` is true |
 | `PresentRefinedWhenReady` | `bool` | True (default): finalize presents the refined mesh and releases the live TSDF. False: bake into memory and keep the live vertex mesh until the host presents |
 | `SetRefinedBackfaceCull(cullBack)` | `void` | Two-sided in the room, `Cull Back` outside (`RefinedMeshBackface.shader`). Quest ignores ShaderLab `Cull [_Cull]` |

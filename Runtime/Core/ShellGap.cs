@@ -49,7 +49,8 @@ namespace Genesis.RoomScan
         public readonly float Closure;
         /// <summary>Total leak area, m² (all leak faces, including patches below the hole minimum).</summary>
         public readonly float LeakAreaM2;
-        /// <summary>Surface area estimate (free–solid faces × voxel²), m².</summary>
+        /// <summary>Surface area estimate, m²: the larger of the free–solid faces × voxel² and the surface band's
+        /// voxel estimate (<c>VolumeIntegrator.FaceSurfaceAreaM2</c> / <c>BandSurfaceAreaM2</c>).</summary>
         public readonly float SurfaceAreaM2;
         /// <summary>Leak patches at or above the minimum area.</summary>
         public readonly int HoleCount;
