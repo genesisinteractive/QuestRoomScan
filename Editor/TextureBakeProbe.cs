@@ -38,10 +38,16 @@ namespace Genesis.RoomScan.Editor
         [MenuItem("Tools/Room Scan/Re-bake Package Atlas (head under 25 deg per s, hands at most 12 %)")]
         static void MenuSlowHands() => Start(0.12f, "slow25_hands12", 25f);
 
+        // x1.85: the most a 1D texel dispatch takes (65535 groups x 256 = 16.7 M texels) on a 2180x2232 package.
+        [MenuItem("Tools/Room Scan/Re-bake Package Atlas (all keyframes, atlas x1.85)")]
+        static void MenuAllDenser() => Start(1.01f, "all_x185", 0f, 1.85f);
+
         /// <summary>Bake the package in <see cref="PackagePref"/>, dropping frames whose hand footprint exceeds
         /// <paramref name="maxHandCoverage"/> (≥ 1 keeps all), into <see cref="OutDir"/>/<paramref name="name"/>.png.
         /// </summary>
-        public static async void Start(float maxHandCoverage, string name, float maxHeadDegPerSec = 0f)
+        /// <param name="atlasScale">Bake the package's own UV layout into an atlas this many times larger each way
+        /// (2 = four times the texels): what a denser atlas would show, without a new unwrap.</param>
+        public static async void Start(float maxHandCoverage, string name, float maxHeadDegPerSec = 0f, float atlasScale = 1f)
         {
             Directory.CreateDirectory(OutDir);
             string status = Path.Combine(OutDir, "status.txt");
@@ -58,7 +64,7 @@ namespace Genesis.RoomScan.Editor
                 var refine = UnityEngine.Object.FindAnyObjectByType<TextureRefinement>(FindObjectsInactive.Include);
                 if (refine == null) { Status("no TextureRefinement in the scene"); return; }
 
-                var mesh = ReadRefinedMesh(Path.Combine(pkg, "refined_mesh.bin"));
+                var mesh = ReadRefinedMesh(Path.Combine(pkg, "refined_mesh.bin"), atlasScale);
                 string kfDir = FilterKeyframes(Path.Combine(pkg, "keyframes"), maxHandCoverage, maxHeadDegPerSec, name,
                     out int kept, out int total);
                 Status($"baking {kept}/{total} keyframes (hand footprint ≤ {maxHandCoverage:P0}" +
@@ -80,13 +86,13 @@ namespace Genesis.RoomScan.Editor
             }
         }
 
-        static UnwrappedMeshResult ReadRefinedMesh(string path)
+        static UnwrappedMeshResult ReadRefinedMesh(string path, float atlasScale = 1f)
         {
             using var r = new BinaryReader(File.OpenRead(path));
             r.ReadUInt32();
             r.ReadInt32();
             int vertCount = r.ReadInt32(), idxCount = r.ReadInt32();
-            int atlasW = r.ReadInt32(), atlasH = r.ReadInt32();
+            int atlasW = Mathf.RoundToInt(r.ReadInt32() * atlasScale), atlasH = Mathf.RoundToInt(r.ReadInt32() * atlasScale);
             var positions = new Vector3[vertCount];
             var normals = new Vector3[vertCount];
             var uvs = new Vector2[vertCount];

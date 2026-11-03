@@ -127,6 +127,31 @@ namespace Genesis.RoomScan
             _pca.RequestedResolution = requestedResolution;
             _pca.MaxFramerate = maxFramerate;
             _pca.enabled = true;
+            LogSupportedResolutionsOnce();
+        }
+
+#if UNITY_ANDROID && !UNITY_EDITOR
+        static bool s_loggedResolutions;
+#endif
+
+        /// <summary>The resolutions this headset's camera offers, once per run: which image sizes a scan could ask
+        /// for (the texture bake's detail and each keyframe's field of view follow from it).</summary>
+        void LogSupportedResolutionsOnce()
+        {
+#if UNITY_ANDROID && !UNITY_EDITOR
+            if (s_loggedResolutions) return;
+            s_loggedResolutions = true;
+            try
+            {
+                var list = PassthroughCameraAccess.GetSupportedResolutions(cameraPosition);
+                Logger.Info($"PassthroughCameraProvider: requested {requestedResolution.x}x{requestedResolution.y} @ {maxFramerate} fps; " +
+                            $"supported: {(list == null ? "none" : string.Join(", ", Array.ConvertAll(list, r => $"{r.x}x{r.y}")))}");
+            }
+            catch (Exception e)
+            {
+                Logger.Warning($"PassthroughCameraProvider: could not list supported resolutions: {e.Message}");
+            }
+#endif
         }
 
         /// <inheritdoc />

@@ -53,6 +53,8 @@ All notable changes to this package are documented here. The format follows
 
 ### Added
 
+- `PassthroughCameraProvider` logs the camera's supported resolutions once per
+  run, beside the one requested.
 - Keyframes record the head turn speed at capture (`"av"`, deg/s, in
   `frames.jsonl`). A pose already covered only by fast-turn keyframes is
   captured again when the head holds still on it (`sharpRetakeDegPerSec`, 15;
@@ -63,7 +65,8 @@ All notable changes to this package are documented here. The format follows
   package's mesh with a baked atlas (or its bare geometry) through chosen
   keyframes' cameras beside their photos, with a render-to-photo correlation
   per view. Check Keyframe Steady Retakes drives the collector with a fast
-  sweep and a slow one.
+  sweep and a slow one. Re-bake Package Atlas (atlas x1.85) bakes a package's
+  own UV layout into a denser atlas, to judge what a larger atlas would show.
 
 - Stalled holes are capped: when the leak has not shrunk for `stallSeconds`
   (20) near the end of a scan (total leak at most `stallMaxLeakM2`, 2 m²), holes
