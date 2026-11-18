@@ -6,6 +6,38 @@ All notable changes to this package are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-19
+
+Scan textures stay aligned after a tracking reset (Space Setup in the same
+session, the headset switched off, lost tracking), and rooms that are not a box
+are found and scanned whole.
+
+### Added
+
+- `RoomScanSession.IsHeadsetWithinBoundSceneRoom(outsideToleranceMetres)` and
+  `RoomUnderstanding.IsHeadsetInsideRoom(uuid, outsideToleranceMetres)`: the
+  headset still counts as in the room up to that far past its outer walls,
+  floor and ceiling. The strict test counts a head within 8 cm of a wall as
+  outside (so a doorway is not the room); for "has the player walked out", a
+  head leaning on a wall must not count.
+
+### Fixed
+
+- Room occupancy (`IsHeadsetInsideAnyRoom`, `IsHeadsetInsideRoom`, the room
+  containing a point) in rooms that are not a box. Every outer wall was tested
+  as an infinite plane, so in an L-shaped room, or one with a wall jog or an
+  alcove, part of the floor read as outside the room. A wall now counts only
+  in front of its width and near its plane; the floor outline decides the rest.
+- The scan of a room that is not a box covered only part of it. The scan volume
+  is the intersection of the outer walls' planes, and an inner wall's plane cut
+  the room; only walls with the whole floor outline on their inside bound it now.
+- Scan textures landed offset from the geometry after a tracking reset (Space
+  Setup in the same session, the headset switched off, lost tracking). Passthrough
+  Camera Access returns the camera's world pose, and the scan took it through the
+  tracking space a second time: harmless while the tracking space sits at
+  identity, wrong by the whole world-lock correction once it has moved. The camera
+  pose is used as it is now; depth still goes through the tracking space.
+
 ## [1.4.0] - 2026-11-04
 
 Scan textures line up again on current headsets, a fully scanned room reaches

@@ -2183,6 +2183,7 @@ namespace Genesis.RoomScan
 
         private int _colorFrameLog;
         private bool _cameraAvailable;
+
         private void ProvideColorFrame()
         {
             ICameraProvider provider = GetActiveCameraProvider();
@@ -2212,7 +2213,12 @@ namespace Genesis.RoomScan
                     _depthCapture?.SetRGBGuide(frame);
 
                     Pose pose = provider.CameraPose;
-                    if (_depthCapture != null)
+                    // Passthrough Camera Access gives the camera's WORLD pose ("Camera's world-space pose at Timestamp":
+                    // MRUK composes it with the tracking space, world lock included). Taking it through the tracking space
+                    // again applied that transform twice: invisible while the tracking space sits at identity (a fresh
+                    // session), every photo misplaced once world lock had moved it (after Space Setup, the headset off,
+                    // lost tracking). Other providers report tracking-space poses.
+                    if (_depthCapture != null && !(provider is PassthroughCameraProvider))
                         pose = _depthCapture.TrackingToWorld(pose);
                     Vector2 focal = provider.FocalLength;
                     Vector2 principal = provider.PrincipalPoint;
