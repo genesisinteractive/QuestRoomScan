@@ -2192,7 +2192,7 @@ namespace Genesis.RoomScan
         // 0.2° nothing is applied, so a session where the spaces agree is untouched.
         private const float SpaceFixMinMetres = 0.005f, SpaceFixMinDegrees = 0.2f, SpaceFixStillDegPerSec = 15f;
         private Pose _spaceFix = Pose.identity;
-        private bool _spaceFixOn;
+        private bool _spaceFixOn, _spaceFixNoEyeLogged;
         private Pose _spaceFixLogged = Pose.identity;
         private Quaternion _lastEyeRot = Quaternion.identity;
         private float _lastEyeTime = -1f;
@@ -2202,11 +2202,20 @@ namespace Genesis.RoomScan
         {
             if (_rig == null) _rig = FindAnyObjectByType<OVRCameraRig>();
             if (_rig == null || _rig.centerEyeAnchor == null || _rig.trackingSpace == null) return;
-            if (!OVRPlugin.initialized || !OVRPlugin.GetNodePositionTracked(OVRPlugin.Node.EyeCenter)) return;
 
             Transform space = _rig.trackingSpace, eye = _rig.centerEyeAnchor;
             Quaternion uRot = Quaternion.Inverse(space.rotation) * eye.rotation;
             Vector3 uPos = space.InverseTransformPoint(eye.position);
+            RecordHead(uRot);
+            if (!OVRPlugin.initialized || !OVRPlugin.GetNodePositionTracked(OVRPlugin.Node.EyeCenter))
+            {
+                if (!_spaceFixNoEyeLogged)
+                {
+                    _spaceFixNoEyeLogged = true;
+                    Logger.Info("Camera space offset: OVRPlugin has no tracked centre eye, not measured");
+                }
+                return;
+            }
             // still frames only: the rig and OVRPlugin can be a frame apart while the head turns
             float now = Time.unscaledTime, dt = now - _lastEyeTime;
             float turn = Quaternion.Angle(uRot, _lastEyeRot);
@@ -2234,6 +2243,67 @@ namespace Genesis.RoomScan
                             $"{Quaternion.Angle(_spaceFix.rotation, Quaternion.identity):0.0}° — " +
                             (_spaceFixOn ? "applied to the camera pose" : "below the threshold, not applied"));
             }
+        }
+
+        // ── when the photo's pose is from ──
+        // MRUK takes each photo's pose from the head at the photo's own timestamp. To see whether that is the right
+        // moment, keep the head's rotation over the last ~1.8 s and find the moment it matches the photo's pose; with
+        // the head turning, that is how old the pose really is. Logged every 2 s beside the photo's age by its clock.
+        private const int HeadHistory = 128;
+        private readonly double[] _headT = new double[HeadHistory];
+        private readonly Quaternion[] _headR = new Quaternion[HeadHistory];
+        private int _headN, _headAt;
+        private double _poseAgeSum, _clockAgeSum, _turnSum;
+        private int _timingN;
+        private float _nextTimingLog;
+        private bool _cameraModelLogged;
+
+        private void RecordHead(Quaternion rot)
+        {
+            _headAt = (_headAt + 1) % HeadHistory;
+            _headT[_headAt] = Time.realtimeSinceStartupAsDouble;
+            _headR[_headAt] = rot;
+            if (_headN < HeadHistory) _headN++;
+        }
+
+        private void CheckPhotoTiming(PassthroughCameraProvider pca)
+        {
+            if (!_cameraModelLogged)
+            {
+                _cameraModelLogged = true;
+                var lens = pca.LensOffset;
+                Logger.Info($"Camera model: image {pca.CurrentResolution} sensor {pca.SensorResolution} focal {pca.FocalLength} " +
+                            $"principal {pca.PrincipalPoint} lens {lens.position * 100f} cm {lens.rotation.eulerAngles}°");
+            }
+            if (_headN < 16) return;
+            double now = Time.realtimeSinceStartupAsDouble;
+            // the head's turn rate over the last ~0.1 s: a still head matches every moment equally
+            int back = (_headAt - 7 + HeadHistory) % HeadHistory;
+            double span = now - _headT[back];
+            if (span <= 0.0) return;
+            float turn = (float)(Quaternion.Angle(_headR[_headAt], _headR[back]) / span);
+            if (turn < 40f) return;
+
+            Quaternion head = pca.CameraPose.rotation * Quaternion.Inverse(pca.LensOffset.rotation);
+            float best = float.MaxValue;
+            double bestT = now;
+            for (int i = 0; i < _headN; i++)
+            {
+                float a = Quaternion.Angle(_headR[i], head);
+                if (a < best) { best = a; bestT = _headT[i]; }
+            }
+            double clock = (DateTime.UtcNow - DateTime.UnixEpoch).TotalSeconds - pca.FrameTimeSeconds;
+            _poseAgeSum += now - bestT;
+            _clockAgeSum += clock;
+            _turnSum += turn;
+            _timingN++;
+            if (Time.unscaledTime < _nextTimingLog) return;
+            _nextTimingLog = Time.unscaledTime + 2f;
+            Logger.Info($"Camera timing: the photo's pose matches the head {_poseAgeSum / _timingN * 1000.0:0} ms ago " +
+                        $"(best within {best:0.0}°), the photo is {_clockAgeSum / _timingN * 1000.0:0} ms old by its clock, " +
+                        $"head {_turnSum / _timingN:0}°/s, n={_timingN}");
+            _poseAgeSum = _clockAgeSum = _turnSum = 0.0;
+            _timingN = 0;
         }
 
         private void ProvideColorFrame()
@@ -2265,6 +2335,7 @@ namespace Genesis.RoomScan
                 {
                     _depthCapture?.SetRGBGuide(frame);
 
+                    if (provider is PassthroughCameraProvider pcaTiming) CheckPhotoTiming(pcaTiming);
                     Pose pose = provider.CameraPose;
                     if (_spaceFixOn && provider is PassthroughCameraProvider)
                         pose = new Pose(_spaceFix.rotation * pose.position + _spaceFix.position,
