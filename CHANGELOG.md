@@ -22,6 +22,9 @@ All notable changes to this package are documented here. The format follows
   as an infinite plane, so in an L-shaped room, or one with a wall jog or an
   alcove, part of the floor read as outside the room. A wall now counts only
   in front of its width and near its plane; the floor outline decides the rest.
+- The scan of a room that is not a box covered only part of it. The scan volume
+  is the intersection of the outer walls' planes, and an inner wall's plane cut
+  the room; only walls with the whole floor outline on their inside bound it now.
 
 ## [1.4.0] - 2026-11-04
 

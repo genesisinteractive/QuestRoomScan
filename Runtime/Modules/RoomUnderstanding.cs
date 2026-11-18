@@ -1080,12 +1080,24 @@ namespace Genesis.RoomScan
                 dst.Add(new Vector4(inwardUnit.x, inwardUnit.y, inwardUnit.z, w));
             }
 
+            /// <summary>Some corner of the floor outline lies behind the plane by more than the hull's expansion.
+            /// False without an outline (every wall bounds the hull, as before).</summary>
+            static bool PlaneCutsOutline(List<Vector3> outline, Vector3 inwardUnit, Vector3 pointOnPlane)
+            {
+                if (outline == null) return false;
+                for (int i = 0; i < outline.Count; i++)
+                    if (Vector3.Dot(outline[i] - pointOnPlane, inwardUnit) < -TsdfClipExpandMetres)
+                        return true;
+                return false;
+            }
+
             internal static int CopyRoomClipPlanes(MRUKRoom room, List<Vector4> dst)
             {
                 if (dst == null) return 0;
                 dst.Clear();
                 if (room == null || room.Anchors == null) return 0;
 
+                var outline = room.GetRoomOutline();
                 for (int i = 0; i < room.Anchors.Count && dst.Count < MaxRoomClipPlanes; i++)
                 {
                     var a = room.Anchors[i];
@@ -1093,6 +1105,10 @@ namespace Genesis.RoomScan
                     if (!a.HasAnyLabel(OuterWallLabels)) continue;
 
                     Vector3 n = Inward(room, a);
+                    // The hull is the intersection of these planes, so it is convex. In a room that is not a box (an
+                    // L, a wall jog, an alcove) an inner wall's plane cuts through the room and the scan lost the part
+                    // behind it: only walls with the whole floor outline on their inside bound the hull.
+                    if (PlaneCutsOutline(outline, n, a.transform.position)) continue;
                     AddExpandedPlane(dst, n, a.transform.position);
                 }
 
