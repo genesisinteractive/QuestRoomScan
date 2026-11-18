@@ -66,10 +66,6 @@ namespace Genesis.RoomScan
                 ? (_pca.Timestamp - DateTime.UnixEpoch).TotalSeconds
                 : Time.realtimeSinceStartupAsDouble;
 
-        /// <summary>The camera's pose on the head (the lens against the head pose PCA times each photo by).</summary>
-        public Pose LensOffset =>
-            _pca != null && _pca.IsPlaying ? _pca.Intrinsics.LensOffset : Pose.identity;
-
         /// <inheritdoc />
         public Vector2 FocalLength =>
             _pca != null && _pca.IsPlaying ? _pca.Intrinsics.FocalLength : Vector2.one;

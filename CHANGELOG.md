@@ -6,6 +6,12 @@ All notable changes to this package are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-19
+
+Scan textures stay aligned after a tracking reset (Space Setup in the same
+session, the headset switched off, lost tracking), and rooms that are not a box
+are found and scanned whole.
+
 ### Added
 
 - `RoomScanSession.IsHeadsetWithinBoundSceneRoom(outsideToleranceMetres)` and
