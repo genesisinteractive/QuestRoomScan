@@ -731,6 +731,13 @@ namespace Genesis.RoomScan
         internal static class Query
         {
             const float OuterWallInsetMetres = 0.08f;
+
+            /// <summary>
+            /// How far behind its plane an outer wall still decides occupancy. Further behind, the point is in
+            /// another part of a room that is not a box (an L, a wall jog, an alcove): the plane of an inner wall,
+            /// extended, crosses the room there, and the floor outline decides instead.
+            /// </summary>
+            const float WallReachMetres = 0.5f;
             /// <summary>
             /// TSDF clip hull is the MRUK outer walls / floor / ceiling
             /// pushed this far <b>outward</b> once, then confined hard.
@@ -783,8 +790,8 @@ namespace Genesis.RoomScan
                 return InsideOuterWalls(room, worldPos);
             }
 
-            /// <summary>Inside the room's bounds and outer walls, each pushed <paramref name="tolerance"/> metres
-            /// outward (the floor outline is not used: a head over a wall's line is past the outline too).</summary>
+            /// <summary>Inside the room's bounds, its floor outline and its outer walls, each pushed
+            /// <paramref name="tolerance"/> metres outward.</summary>
             internal static bool ContainsWithin(MRUKRoom room, Vector3 worldPos, float tolerance)
             {
                 if (room == null) return false;
@@ -794,7 +801,31 @@ namespace Genesis.RoomScan
                     bounds.Expand(2f * tolerance);
                     if (!bounds.Contains(worldPos)) return false;
                 }
+                // a room that is not a box has parts of its bounds outside it (the missing corner of an L)
+                if (!room.IsPositionInRoom(worldPos, testVerticalBounds: false)
+                    && !NearOutline(room, worldPos, tolerance))
+                    return false;
                 return InsideOuterWalls(room, worldPos, -tolerance);
+            }
+
+            /// <summary>Within <paramref name="tolerance"/> metres (top-down) of the room's floor outline. True
+            /// when the room has no outline, so the walls decide as they did.</summary>
+            static bool NearOutline(MRUKRoom room, Vector3 worldPos, float tolerance)
+            {
+                var outline = room.GetRoomOutline();
+                if (outline == null || outline.Count < 2) return true;
+                var p = new Vector2(worldPos.x, worldPos.z);
+                float t2 = tolerance * tolerance;
+                for (int i = 0; i < outline.Count; i++)
+                {
+                    var a = new Vector2(outline[i].x, outline[i].z);
+                    var b = new Vector2(outline[(i + 1) % outline.Count].x, outline[(i + 1) % outline.Count].z);
+                    var ab = b - a;
+                    float len2 = ab.sqrMagnitude;
+                    float t = len2 > 1e-8f ? Mathf.Clamp01(Vector2.Dot(p - a, ab) / len2) : 0f;
+                    if ((a + t * ab - p).sqrMagnitude <= t2) return true;
+                }
+                return false;
             }
 
             internal static MRUKRoom FindContaining(IList<MRUKRoom> rooms, Vector3 worldPos)
@@ -1004,25 +1035,40 @@ namespace Genesis.RoomScan
                 InsideOuterWalls(room, worldPos, OuterWallInsetMetres);
 
             /// <summary>Inward of every outer wall by at least <paramref name="inset"/> metres (negative: allowed
-            /// that far outside).</summary>
+            /// that far outside), where the wall is: a wall counts only for a point in front of its width and
+            /// within <see cref="WallReachMetres"/> behind its plane. Every wall as an infinite plane read the other
+            /// arm of an L-shaped room as outside it, so a set-up room was never found.</summary>
             static bool InsideOuterWalls(MRUKRoom room, Vector3 worldPos, float inset)
             {
                 var anchors = room.Anchors;
                 if (anchors == null || anchors.Count == 0)
                     return true;
 
+                float spanMargin = Mathf.Max(0f, -inset);
                 for (int i = 0; i < anchors.Count; i++)
                 {
                     var a = anchors[i];
                     if (a == null) continue;
                     if (!a.HasAnyLabel(OuterWallLabels)) continue;
 
-                    if (Vector3.Dot(worldPos - a.transform.position, Inward(room, a))
-                        < inset)
-                        return false;
+                    float d = Vector3.Dot(worldPos - a.transform.position, Inward(room, a));
+                    if (d >= inset) continue;
+                    if (d < -WallReachMetres) continue;
+                    if (!InWallSpan(a, worldPos, spanMargin)) continue;
+                    return false;
                 }
 
                 return true;
+            }
+
+            /// <summary>The point lies in front of the wall's width (its plane rect, widened by
+            /// <paramref name="margin"/>). True for a wall without a rect.</summary>
+            static bool InWallSpan(MRUKAnchor wall, Vector3 worldPos, float margin)
+            {
+                if (!wall.PlaneRect.HasValue) return true;
+                var r = wall.PlaneRect.Value;
+                float x = wall.transform.InverseTransformPoint(worldPos).x;
+                return x >= r.xMin - margin && x <= r.xMax + margin;
             }
 
             const int MaxRoomClipPlanes = VolumeIntegrator.MaxRoomClipPlanes;

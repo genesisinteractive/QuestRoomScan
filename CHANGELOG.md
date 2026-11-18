@@ -15,6 +15,14 @@ All notable changes to this package are documented here. The format follows
   outside (so a doorway is not the room); for "has the player walked out", a
   head leaning on a wall must not count.
 
+### Fixed
+
+- Room occupancy (`IsHeadsetInsideAnyRoom`, `IsHeadsetInsideRoom`, the room
+  containing a point) in rooms that are not a box. Every outer wall was tested
+  as an infinite plane, so in an L-shaped room, or one with a wall jog or an
+  alcove, part of the floor read as outside the room. A wall now counts only
+  in front of its width and near its plane; the floor outline decides the rest.
+
 ## [1.4.0] - 2026-11-04
 
 Scan textures line up again on current headsets, a fully scanned room reaches
