@@ -2183,9 +2183,63 @@ namespace Genesis.RoomScan
 
         private int _colorFrameLog;
         private bool _cameraAvailable;
+
+        // ── the camera's space ──
+        // Passthrough Camera Access reports its pose in OVRPlugin's app space (MRUK's native library); depth and the
+        // camera rig are in Unity's XR tracking space. The two agree until one is recentred and the other is not: after
+        // Space Setup in the same session every photo landed offset from the geometry. Each still frame, the centre
+        // eye in both spaces gives the offset between them, and the camera pose is carried across it. Under 5 mm and
+        // 0.2° nothing is applied, so a session where the spaces agree is untouched.
+        private const float SpaceFixMinMetres = 0.005f, SpaceFixMinDegrees = 0.2f, SpaceFixStillDegPerSec = 15f;
+        private Pose _spaceFix = Pose.identity;
+        private bool _spaceFixOn;
+        private Pose _spaceFixLogged = Pose.identity;
+        private Quaternion _lastEyeRot = Quaternion.identity;
+        private float _lastEyeTime = -1f;
+        private OVRCameraRig _rig;
+
+        private void UpdateSpaceFix()
+        {
+            if (_rig == null) _rig = FindAnyObjectByType<OVRCameraRig>();
+            if (_rig == null || _rig.centerEyeAnchor == null || _rig.trackingSpace == null) return;
+            if (!OVRPlugin.initialized || !OVRPlugin.GetNodePositionTracked(OVRPlugin.Node.EyeCenter)) return;
+
+            Transform space = _rig.trackingSpace, eye = _rig.centerEyeAnchor;
+            Quaternion uRot = Quaternion.Inverse(space.rotation) * eye.rotation;
+            Vector3 uPos = space.InverseTransformPoint(eye.position);
+            // still frames only: the rig and OVRPlugin can be a frame apart while the head turns
+            float now = Time.unscaledTime, dt = now - _lastEyeTime;
+            float turn = Quaternion.Angle(uRot, _lastEyeRot);
+            _lastEyeRot = uRot;
+            _lastEyeTime = now;
+            if (dt <= 0f || turn / dt > SpaceFixStillDegPerSec) return;
+
+            OVRPose o = OVRPlugin.GetNodePose(OVRPlugin.Node.EyeCenter, OVRPlugin.Step.Render).ToOVRPose();
+            // C carries app space into tracking space: C * o = u
+            Quaternion cRot = uRot * Quaternion.Inverse(o.orientation);
+            Vector3 cPos = uPos - cRot * o.position;
+            bool far = (cPos - _spaceFix.position).sqrMagnitude > 0.05f * 0.05f
+                       || Quaternion.Angle(cRot, _spaceFix.rotation) > 2f;
+            _spaceFix = far
+                ? new Pose(cPos, cRot)
+                : new Pose(Vector3.Lerp(_spaceFix.position, cPos, 0.2f), Quaternion.Slerp(_spaceFix.rotation, cRot, 0.2f));
+            _spaceFixOn = _spaceFix.position.magnitude > SpaceFixMinMetres
+                          || Quaternion.Angle(_spaceFix.rotation, Quaternion.identity) > SpaceFixMinDegrees;
+
+            if ((_spaceFix.position - _spaceFixLogged.position).sqrMagnitude > 0.02f * 0.02f
+                || Quaternion.Angle(_spaceFix.rotation, _spaceFixLogged.rotation) > 1f)
+            {
+                _spaceFixLogged = _spaceFix;
+                Logger.Info($"Camera space offset (app → tracking): {_spaceFix.position.magnitude * 100f:0.0} cm, " +
+                            $"{Quaternion.Angle(_spaceFix.rotation, Quaternion.identity):0.0}° — " +
+                            (_spaceFixOn ? "applied to the camera pose" : "below the threshold, not applied"));
+            }
+        }
+
         private void ProvideColorFrame()
         {
             ICameraProvider provider = GetActiveCameraProvider();
+            UpdateSpaceFix();
 
             // IsPlaying = camera subsystem running (stable signal).
             // IsReady = new frame available this tick (toggles at camera fps < app fps).
@@ -2212,6 +2266,9 @@ namespace Genesis.RoomScan
                     _depthCapture?.SetRGBGuide(frame);
 
                     Pose pose = provider.CameraPose;
+                    if (_spaceFixOn && provider is PassthroughCameraProvider)
+                        pose = new Pose(_spaceFix.rotation * pose.position + _spaceFix.position,
+                            _spaceFix.rotation * pose.rotation);
                     if (_depthCapture != null)
                         pose = _depthCapture.TrackingToWorld(pose);
                     Vector2 focal = provider.FocalLength;

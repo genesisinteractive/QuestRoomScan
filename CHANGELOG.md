@@ -25,6 +25,12 @@ All notable changes to this package are documented here. The format follows
 - The scan of a room that is not a box covered only part of it. The scan volume
   is the intersection of the outer walls' planes, and an inner wall's plane cut
   the room; only walls with the whole floor outline on their inside bound it now.
+- Scan textures landed offset from the geometry for the rest of a session after
+  Space Setup. The camera pose comes in OVRPlugin's app space, depth and the rig
+  in Unity's XR tracking space; when one is recentred and not the other, they
+  differ. The offset is measured each still frame from the centre eye in both
+  spaces and the camera pose is carried across it (not applied under 5 mm and
+  0.2°, so sessions where the spaces agree are unchanged; logged when it moves).
 
 ## [1.4.0] - 2026-11-04
 
